@@ -1,5 +1,6 @@
 import json
 import urllib.request
+from uuid import uuid4
 
 import pytest
 
@@ -56,7 +57,7 @@ def test_middleware_rejects_out_of_range_with_actionable_message():
     assert "Downgrade" in err["error"]["details"]["action"]
 
 
-def test_bridge_client_runs_handshake_before_submit(monkeypatch):
+def test_bridge_client_runs_handshake_before_text_submit(monkeypatch):
     calls = []
 
     def fake_urlopen(req):
@@ -68,12 +69,13 @@ def test_bridge_client_runs_handshake_before_submit(monkeypatch):
                         "min_supported": "1.2",
                         "max_supported": "1.3",
                         "recommended": "1.3",
-                    }
+                    },
+                    "auth": {"hmacRequired": True},
                 }
             )
-        if req.full_url.endswith("/submit_job"):
+        if req.full_url.endswith("/jobs/text"):
             body = req.data.decode("utf-8")
-            return _FakeResponse({"status": "ok", "echo": json.loads(body)})
+            return _FakeResponse({"created": True, "job": {"id": "j1", "echo": json.loads(body)}})
         raise AssertionError(f"Unexpected URL: {req.full_url}")
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
@@ -86,13 +88,13 @@ def test_bridge_client_runs_handshake_before_submit(monkeypatch):
         )
     )
 
-    result = client.submit_job("req-1", {"job": "demo"})
+    result = client.create_text_job(client_request_id=str(uuid4()), prompt="demo")
 
     assert calls[0][0] == "GET"
     assert calls[0][1].endswith("/capabilities")
     assert calls[1][0] == "POST"
-    assert calls[1][1].endswith("/submit_job")
-    assert result["status"] == "ok"
+    assert calls[1][1].endswith("/jobs/text")
+    assert result["created"] is True
 
 
 def test_bridge_client_fails_when_protocol_too_old(monkeypatch):
@@ -103,7 +105,8 @@ def test_bridge_client_fails_when_protocol_too_old(monkeypatch):
                     "min_supported": "1.2",
                     "max_supported": "1.3",
                     "recommended": "1.3",
-                }
+                },
+                "auth": {"hmacRequired": False},
             }
         )
 
@@ -118,4 +121,4 @@ def test_bridge_client_fails_when_protocol_too_old(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="upgrade"):
-        client.submit_job("req-2", {"job": "demo"})
+        client.create_text_job(client_request_id=str(uuid4()), prompt="demo")

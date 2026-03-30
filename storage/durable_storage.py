@@ -5,10 +5,21 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 from uuid import UUID
 
 from bridge.models import IN_FLIGHT_STATES, Job, JobStatus, JobTransition, JobType
+
+
+_ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
+    JobStatus.CREATED: {JobStatus.SUBMITTED, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.SUBMITTED: {JobStatus.POLLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.POLLING: {JobStatus.DOWNLOADING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.DOWNLOADING: {JobStatus.COMPLETE, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.COMPLETE: set(),
+    JobStatus.CANCELLED: set(),
+    JobStatus.FAILED: set(),
+}
 
 
 class DurableStorage:
@@ -40,6 +51,8 @@ class DurableStorage:
                     client_request_id TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
                     remote_provider_id TEXT,
+                    asset_id TEXT,
+                    output_manifest_json TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(type, client_request_id)
@@ -64,8 +77,21 @@ class DurableStorage:
                     created_at TEXT NOT NULL,
                     UNIQUE(job_id, variant, checksum)
                 );
+
+                CREATE TABLE IF NOT EXISTS imported_assets (
+                    id TEXT PRIMARY KEY,
+                    manifest_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "asset_id" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN asset_id TEXT")
+            if "output_manifest_json" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN output_manifest_json TEXT")
 
     def get_job_by_request_id(self, job_type: JobType, client_request_id: UUID) -> Job | None:
         with self._conn() as conn:
@@ -75,13 +101,27 @@ class DurableStorage:
             ).fetchone()
             return _row_to_job(row) if row else None
 
+    def get_job(self, job_id: str) -> Job | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            return _row_to_job(row) if row else None
+
+    def get_imported_asset(self, asset_id: str) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT manifest_json FROM imported_assets WHERE id = ?",
+                (asset_id,),
+            ).fetchone()
+            return json.loads(row["manifest_json"]) if row else None
+
     def create_job(self, job: Job) -> Job:
         with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO jobs (
-                    id, type, status, client_request_id, payload_json, remote_provider_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, type, status, client_request_id, payload_json, remote_provider_id,
+                    asset_id, output_manifest_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job.id,
@@ -90,6 +130,8 @@ class DurableStorage:
                     str(job.client_request_id),
                     json.dumps(job.payload),
                     job.remote_provider_id,
+                    job.asset_id,
+                    json.dumps(job.output_manifest_json) if job.output_manifest_json else None,
                     job.created_at.isoformat(),
                     job.updated_at.isoformat(),
                 ),
@@ -109,6 +151,8 @@ class DurableStorage:
             if row is None:
                 raise KeyError(f"Unknown job_id={job_id}")
             current = _row_to_job(row)
+            if to_status not in _ALLOWED_TRANSITIONS[current.status] and current.status != to_status:
+                raise ValueError(f"Invalid transition {current.status.value} -> {to_status.value}")
             now = datetime.now(timezone.utc).isoformat()
             conn.execute(
                 "UPDATE jobs SET status = ?, remote_provider_id = COALESCE(?, remote_provider_id), updated_at = ? WHERE id = ?",
@@ -127,6 +171,51 @@ class DurableStorage:
             )
             refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return _row_to_job(refreshed)
+
+    def attach_job_artifacts(
+        self,
+        job_id: str,
+        *,
+        asset_id: str | None = None,
+        output_manifest: dict[str, Any] | None = None,
+    ) -> Job:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown job_id={job_id}")
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """
+                UPDATE jobs
+                SET asset_id = COALESCE(?, asset_id),
+                    output_manifest_json = COALESCE(?, output_manifest_json),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    asset_id,
+                    json.dumps(output_manifest) if output_manifest else None,
+                    now,
+                    job_id,
+                ),
+            )
+            refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            return _row_to_job(refreshed)
+
+    def save_imported_asset(self, asset_id: str, manifest: dict[str, Any]) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO imported_assets (id, manifest_json, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET manifest_json=excluded.manifest_json
+                """,
+                (
+                    asset_id,
+                    json.dumps(manifest),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
 
     def list_in_flight_jobs(self) -> list[Job]:
         with self._conn() as conn:
@@ -165,6 +254,8 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         client_request_id=UUID(row["client_request_id"]),
         payload=json.loads(row["payload_json"]),
         remote_provider_id=row["remote_provider_id"],
+        asset_id=row["asset_id"],
+        output_manifest_json=json.loads(row["output_manifest_json"]) if row["output_manifest_json"] else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
