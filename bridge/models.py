@@ -19,9 +19,10 @@ class JobStatus(str, Enum):
     DOWNLOADING = "downloading"
     COMPLETE = "complete"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
-TERMINAL_STATES = {JobStatus.COMPLETE, JobStatus.FAILED}
+TERMINAL_STATES = {JobStatus.COMPLETE, JobStatus.FAILED, JobStatus.CANCELLED}
 IN_FLIGHT_STATES = {
     JobStatus.CREATED,
     JobStatus.SUBMITTED,
@@ -47,6 +48,8 @@ class Job:
     client_request_id: UUID
     payload: dict[str, Any]
     remote_provider_id: str | None = None
+    asset_id: str | None = None
+    output_manifest_json: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
