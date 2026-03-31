@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
@@ -11,25 +10,27 @@ from fastapi import FastAPI, File, Form, Header, UploadFile
 from fastapi.responses import JSONResponse
 
 from bridge.adapters import MockSunoAdapter
+from bridge.downloader import AssetDownloader
 from bridge.errors import BridgeError, make_error
 from bridge.middleware import ProtocolRange, validate_protocol_headers
+from bridge.models import CreateJobRequest
+from bridge.schemas.api_models import AssetImportResponse, JobCreateResponse, JobStatusResponse, TextJobCreateRequest
 from bridge.server import capabilities_payload
 from bridge.services.import_service import ImportService
-from bridge.services.job_service import JobService
-from bridge.downloader import AssetDownloader
-from bridge.models import CreateJobRequest
+from bridge.services.job_service import JobOrchestrator, JobService
 from bridge_security import ExpiredRequestError, ReplayDetectedError, RequestSigner, SignatureValidationError, SignedHeaders
 from storage.durable_storage import DurableStorage
 
 PROTOCOL_RANGE = ProtocolRange(min_supported="1.2", max_supported="1.3")
-PROVIDER_VERSION = "0.2.0"
+PROVIDER_VERSION = "0.3.0"
 
 
 class BridgeContext:
-    def __init__(self, storage: DurableStorage, importer: ImportService, jobs: JobService) -> None:
+    def __init__(self, storage: DurableStorage, importer: ImportService, jobs: JobService, orchestrator: JobOrchestrator) -> None:
         self.storage = storage
         self.importer = importer
         self.jobs = jobs
+        self.orchestrator = orchestrator
 
 
 def create_app(
@@ -37,22 +38,21 @@ def create_app(
     db_path: str | Path = "storage/jobs.db",
     assets_root: str | Path = "storage/assets",
     enable_hmac: bool | None = None,
+    shared_secret: str | None = None,
 ) -> FastAPI:
     storage = DurableStorage(db_path)
     importer = ImportService(storage=storage, assets_root=Path(assets_root) / "imported")
     downloader = AssetDownloader(storage=storage, root=Path(assets_root) / "downloads")
-    jobs = JobService(storage=storage, provider=MockSunoAdapter(), downloader=downloader)
-    context = BridgeContext(storage=storage, importer=importer, jobs=jobs)
+    orchestrator = JobOrchestrator(storage=storage, provider=MockSunoAdapter(), downloader=downloader)
+    jobs = JobService(storage=storage, orchestrator=orchestrator)
 
+    context = BridgeContext(storage=storage, importer=importer, jobs=jobs, orchestrator=orchestrator)
     app = FastAPI(title="Suno Studio Bridge", version=PROVIDER_VERSION)
     app.state.ctx = context
-    app.state.protocol_range = PROTOCOL_RANGE
 
-    should_verify = enable_hmac if enable_hmac is not None else os.getenv("BRIDGE_ENABLE_HMAC", "1") == "1"
+    should_verify = enable_hmac if enable_hmac is not None else True
     app.state.require_hmac = should_verify
-    shared_secret = os.getenv("BRIDGE_SHARED_SECRET", "dev-shared-secret")
-    signer = RequestSigner(shared_secret.encode("utf-8"))
-    app.state.request_signer = signer
+    app.state.request_signer = RequestSigner((shared_secret or "dev-shared-secret").encode("utf-8"))
 
     @app.middleware("http")
     async def protocol_security_middleware(request, call_next):
@@ -63,7 +63,7 @@ def create_app(
                 "X-Plugin-Version": headers.get("x-plugin-version", ""),
                 "X-Protocol-Version": headers.get("x-protocol-version", ""),
             },
-            app.state.protocol_range,
+            PROTOCOL_RANGE,
         )
         if not ok:
             return JSONResponse(status_code=400, content=error)
@@ -94,12 +94,20 @@ def create_app(
 
             request._receive = receive_once
 
-        response = await call_next(request)
-        return response
+        return await call_next(request)
 
     @app.exception_handler(BridgeError)
     async def bridge_error_handler(_, exc: BridgeError):
-        return JSONResponse(status_code=400, content=exc.to_payload())
+        status_code = 404 if exc.code.endswith("NOT_FOUND") else 400
+        return JSONResponse(status_code=status_code, content=exc.to_payload())
+
+    @app.on_event("startup")
+    async def on_startup() -> None:
+        context.orchestrator.start()
+
+    @app.on_event("shutdown")
+    async def on_shutdown() -> None:
+        context.orchestrator.stop()
 
     @app.get("/capabilities")
     async def get_capabilities(
@@ -122,41 +130,39 @@ def create_app(
         }
         return payload
 
-    @app.post("/assets/import")
+    @app.post("/assets/import", response_model=AssetImportResponse)
     async def post_assets_import(
         file: UploadFile = File(...),
         normalizeOnImport: bool = Form(default=False),
-    ) -> dict[str, Any]:
+    ) -> AssetImportResponse:
         suffix = Path(file.filename or "upload.bin").suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await file.read())
             tmp_path = Path(tmp.name)
         try:
             manifest = context.importer.import_file(tmp_path, normalize_on_import=normalizeOnImport)
-            return {"assetId": manifest["id"], "manifest": manifest}
+            return AssetImportResponse(assetId=manifest["id"], manifest=manifest)
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    @app.post("/jobs/text")
-    async def post_jobs_text(payload: dict[str, Any]) -> dict[str, Any]:
+    @app.post("/jobs/text", response_model=JobCreateResponse)
+    async def post_jobs_text(payload: TextJobCreateRequest) -> JobCreateResponse:
         request = CreateJobRequest(
-            clientRequestId=UUID(payload["clientRequestId"]),
-            prompt=payload["prompt"],
-            metadata=payload.get("metadata", {}),
+            clientRequestId=payload.clientRequestId,
+            prompt=payload.prompt,
+            metadata=payload.metadata,
         )
         job, created = context.jobs.create_text_job(request)
-        if created:
-            job = context.jobs.run_job(job.id)
-        return {"created": created, "job": _job_to_dict(job)}
+        return JobCreateResponse(created=created, job=_job_to_response(job))
 
-    @app.post("/jobs/audio")
+    @app.post("/jobs/audio", response_model=JobCreateResponse)
     async def post_jobs_audio(
         clientRequestId: str = Form(...),
         prompt: str = Form(default=""),
         metadata: str = Form(default="{}"),
         assetId: str | None = Form(default=None),
         file: UploadFile | None = File(default=None),
-    ) -> dict[str, Any]:
+    ) -> JobCreateResponse:
         local_asset_id = assetId
         if file is not None:
             suffix = Path(file.filename or "upload.bin").suffix
@@ -170,11 +176,7 @@ def create_app(
                 tmp_path.unlink(missing_ok=True)
 
         if not local_asset_id:
-            raise BridgeError(
-                code="AUDIO_SOURCE_REQUIRED",
-                message="Provide either assetId or multipart file for audio jobs.",
-                details={},
-            )
+            raise BridgeError("AUDIO_SOURCE_REQUIRED", "Provide either assetId or multipart file for audio jobs.", {})
 
         request = CreateJobRequest(
             clientRequestId=UUID(clientRequestId),
@@ -182,41 +184,38 @@ def create_app(
             metadata=json.loads(metadata),
         )
         job, created = context.jobs.create_audio_job(request, asset_id=local_asset_id)
-        if created:
-            job = context.jobs.run_job(job.id)
-        return {"created": created, "job": _job_to_dict(job)}
+        return JobCreateResponse(created=created, job=_job_to_response(job))
 
-    @app.get("/jobs/{job_id}")
-    async def get_job(job_id: str) -> dict[str, Any]:
+    @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+    async def get_job(job_id: str) -> JobStatusResponse:
         job = context.storage.get_job(job_id)
         if not job:
             raise BridgeError("JOB_NOT_FOUND", f"Job {job_id} not found", {})
-        return _job_to_dict(job)
+        return _job_to_response(job)
 
-    @app.post("/jobs/{job_id}/cancel")
-    async def cancel_job(job_id: str) -> dict[str, Any]:
+    @app.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
+    async def cancel_job(job_id: str) -> JobStatusResponse:
         try:
             job = context.jobs.cancel_job(job_id)
         except KeyError:
             raise BridgeError("JOB_NOT_FOUND", f"Job {job_id} not found", {})
-        return _job_to_dict(job)
-
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        context.jobs.recover_inflight()
+        return _job_to_response(job)
 
     return app
 
 
-def _job_to_dict(job) -> dict[str, Any]:
-    return {
-        "id": job.id,
-        "type": job.type.value,
-        "status": job.status.value,
-        "clientRequestId": str(job.client_request_id),
-        "remoteProviderId": job.remote_provider_id,
-        "assetId": job.asset_id,
-        "outputManifest": job.output_manifest_json,
-        "createdAt": job.created_at.isoformat(),
-        "updatedAt": job.updated_at.isoformat(),
-    }
+def _job_to_response(job) -> JobStatusResponse:
+    return JobStatusResponse(
+        id=job.id,
+        type=job.type.value,
+        status=job.status.value,
+        clientRequestId=str(job.client_request_id),
+        remoteJobId=job.remote_job_id,
+        assetId=job.asset_id,
+        progress=job.progress,
+        lastError=job.last_error,
+        outputAssets=job.output_assets,
+        outputManifest=job.output_manifest_json,
+        createdAt=job.created_at,
+        updatedAt=job.updated_at,
+    )

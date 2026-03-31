@@ -1,69 +1,60 @@
-# Suno Studio — Local Bridge MVP
+# Suno Studio — Async Local Bridge Runtime
 
-This repository now contains a runnable **Python local bridge MVP** for Suno Studio workflows.
+This repository contains a runnable **asynchronous Python local bridge** for Suno Studio workflows.
 
-## What is implemented
+## What is implemented now
 
-- FastAPI bridge service bound to loopback by default (`127.0.0.1`).
-- Typed HTTP endpoints:
+- FastAPI bridge service with stable endpoint paths:
   - `GET /capabilities`
   - `POST /jobs/text`
   - `POST /jobs/audio`
   - `GET /jobs/{job_id}`
   - `POST /jobs/{job_id}/cancel`
   - `POST /assets/import`
-- Protocol compatibility middleware (`X-Protocol-Version`, etc.).
-- Local security model with request signing (HMAC) enabled by default.
-- Durable SQLite persistence for:
-  - jobs
-  - transitions
-  - remote provider IDs
-  - imported manifests
-  - downloaded output dedup records
-- Audio asset import pipeline:
-  - stores original upload
-  - generates manifest JSON
-  - validates manifest shape against required schema keys
-  - optional normalized derivative (currently placeholder copy behavior)
-- Provider adapter abstraction with deterministic `MockSunoAdapter`.
-- End-to-end integration tests covering text/audio flows and persistence/recovery behaviors.
+- Background async-style orchestration runtime (threaded worker loop + queue) so job creation requests return quickly.
+- Durable SQLite persistence for job lifecycle, progress, remote IDs, artifacts, transitions, and asset manifests.
+- Restart-safe recovery that re-enqueues non-terminal jobs and avoids duplicate output writes via checksum dedup.
+- Protocol compatibility middleware and HMAC request verification.
+- Deterministic `MockSunoAdapter` that simulates queued/in-progress/ready states plus cancellation and retryable failures.
+- Asset import/manifest pipeline with preserved originals and optional placeholder normalized derivative.
 
-## What is intentionally stubbed
+## Async runtime behavior
 
-- **No real Suno integration yet** (mock provider only).
-- **No browser automation adapter implementation** yet.
-- **No JUCE/C++ plugin runtime integration** in this step.
-- **No DAW auto-insert implementation** beyond advisory capability scaffolding.
-- Normalization derivative is currently non-destructive placeholder copy (documented in code).
+- `POST /jobs/text` and `POST /jobs/audio` create jobs and enqueue orchestration work.
+- Worker transitions jobs through states such as `queued_local`, `submitting_remote`, `polling_remote`, `downloading`, then terminal states.
+- `GET /jobs/{job_id}` returns the latest persisted status with progress fields:
+  - `status`, `progress`, `remoteJobId`, `lastError`, `outputAssets`.
+- Cancellation can race with execution safely and results in stable terminal outcome (`cancelled` or already `complete`).
 
-## Local run
+## Runtime bootstrap & discovery
 
-### 1) Install dependencies
+- **Dev mode** (`BRIDGE_DEV_MODE=1`): fixed host/port/env secret.
+- **Normal mode**: loopback-only host + random port, lockfile discovery, keychain-backed shared-secret bootstrap metadata.
+- Discovery lockfile defaults to `~/.suno_studio/bridge.lock` and includes host/port/protocol/auth bootstrap hints.
+
+## What is intentionally still stubbed
+
+- No real Suno provider integration yet.
+- No browser automation implementation.
+- No JUCE/VST3/AU runtime integration in this step.
+- No real DAW auto-insert logic.
+- No real audio loudness normalization DSP (placeholder derivative only).
+
+## Run locally
 
 ```bash
 python -m pip install -e .
-```
-
-### 2) Run bridge
-
-```bash
-suno-bridge
-```
-
-Equivalent:
-
-```bash
 python -m bridge.main
 ```
 
-### 3) Optional env vars
+Optional environment variables:
 
-- `BRIDGE_HOST` (default `127.0.0.1`)
-- `BRIDGE_PORT` (default `7071`)
-- `BRIDGE_DB_PATH` (default `storage/jobs.db`)
-- `BRIDGE_ASSETS_ROOT` (default `storage/assets`)
-- `BRIDGE_ENABLE_HMAC` (`1` by default)
-- `BRIDGE_SHARED_SECRET` (default `dev-shared-secret`)
+- `BRIDGE_DEV_MODE` (`1` for fixed local settings)
+- `BRIDGE_HOST`, `BRIDGE_PORT`
+- `BRIDGE_DB_PATH`, `BRIDGE_ASSETS_ROOT`
+- `BRIDGE_ENABLE_HMAC`
+- `BRIDGE_SHARED_SECRET`
+- `BRIDGE_LOCKFILE`
 
 ## Tests
 
@@ -71,23 +62,12 @@ python -m bridge.main
 pytest -q
 ```
 
-Integration tests cover:
+Integration tests cover non-blocking job creation, polling to completion, cancellation scenarios, restart recovery, concurrent idempotency, dedup after restart, protocol mismatch behavior, and signed request behavior.
 
-- idempotent duplicate create (`clientRequestId`)
-- audio import manifest creation
-- text job flow through mock adapter
-- audio job flow through mock adapter
-- recovery of in-flight jobs
-- protocol mismatch failures
-- canonical error payload shape
-- downloaded asset deduplication
+## Why JUCE/plugin integration is deferred
 
-## Current limitations
+This step hardens bridge runtime semantics (async orchestration, cancellation, recovery, bootstrap/security). Plugin integration should start after these runtime contracts are stable.
 
-- Mock outputs are deterministic fake bytes, not generated music.
-- Recovery currently resumes by deterministic re-run of mock pipeline.
-- HMAC uses shared-secret env default suitable for local MVP only.
+## Exact next recommended step
 
-## Recommended next step
-
-Implement a **real asynchronous orchestration worker** (queue + background polling loop + cancellation tokens) while keeping the current API and storage contracts stable.
+Add a persisted remote-poll scheduler with per-job backoff jitter and provider-specific retry classification, then wire a first non-mock provider adapter behind the same orchestrator contract.

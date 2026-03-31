@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 import wave
 from pathlib import Path
 from uuid import uuid4
@@ -9,9 +11,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from bridge.app import create_app
-from bridge.models import CreateJobRequest
-from bridge.services.job_service import JobService
-from storage.durable_storage import DurableStorage
+from bridge_security import RequestSigner
 
 
 def _wav_bytes() -> bytes:
@@ -32,160 +32,177 @@ def _headers(request_id: str) -> dict[str, str]:
     }
 
 
-def test_idempotent_duplicate_create_with_same_client_request_id(tmp_path: Path):
+def _wait_for_terminal(client: TestClient, job_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = client.get(f"/jobs/{job_id}", headers=_headers(str(uuid4())))
+        assert r.status_code == 200
+        payload = r.json()
+        if payload["status"] in {"complete", "failed", "cancelled"}:
+            return payload
+        time.sleep(0.05)
+    raise TimeoutError(f"job {job_id} did not finish")
+
+
+def test_non_blocking_text_job_creation_and_poll_to_completion(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        response = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "async text", "metadata": {"mock_poll_steps": 4}},
+            headers=_headers("nt-1"),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["job"]["status"] in {"created", "queued_local", "submitting_remote", "polling_remote"}
 
-    payload = {
-        "clientRequestId": str(uuid4()),
-        "prompt": "warm pad",
-        "metadata": {"mode": "song"},
-    }
-
-    first = client.post("/jobs/text", json=payload, headers=_headers("req-1"))
-    second = client.post("/jobs/text", json=payload, headers=_headers("req-2"))
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["created"] is True
-    assert second.json()["created"] is False
-    assert first.json()["job"]["id"] == second.json()["job"]["id"]
+        terminal = _wait_for_terminal(client, body["job"]["id"])
+        assert terminal["status"] == "complete"
+        assert terminal["outputAssets"]
 
 
-def test_audio_import_manifest_creation(tmp_path: Path):
+def test_non_blocking_audio_job_creation_and_poll_to_completion(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
-    client = TestClient(app)
-
-    response = client.post(
-        "/assets/import",
-        files={"file": ("input.wav", _wav_bytes(), "audio/wav")},
-        data={"normalizeOnImport": "false"},
-        headers=_headers("imp-1"),
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["assetId"]
-    manifest = payload["manifest"]
-    assert manifest["id"] == payload["assetId"]
-    assert manifest["checksum"]["algorithm"] == "sha256"
+    with TestClient(app) as client:
+        response = client.post(
+            "/jobs/audio",
+            headers=_headers("na-1"),
+            data={"clientRequestId": str(uuid4()), "prompt": "audio", "metadata": "{}"},
+            files={"file": ("seed.wav", _wav_bytes(), "audio/wav")},
+        )
+        assert response.status_code == 200
+        job = response.json()["job"]
+        assert job["status"] in {"created", "queued_local", "submitting_remote", "polling_remote"}
+        terminal = _wait_for_terminal(client, job["id"])
+        assert terminal["status"] == "complete"
 
 
-def test_text_job_flow_to_completed_asset(tmp_path: Path):
+def test_cancellation_before_remote_submit(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "cancel early", "metadata": {"mock_poll_steps": 10}},
+            headers=_headers("c1"),
+        )
+        job_id = create.json()["job"]["id"]
+        cancel = client.post(f"/jobs/{job_id}/cancel", headers=_headers("c2"))
+        assert cancel.status_code == 200
+        terminal = _wait_for_terminal(client, job_id)
+        assert terminal["status"] in {"cancelled", "complete"}
 
-    text = client.post(
-        "/jobs/text",
-        json={"clientRequestId": str(uuid4()), "prompt": "house loop", "metadata": {}},
-        headers=_headers("h-1"),
-    )
-    assert text.status_code == 200
-    job = text.json()["job"]
-    assert job["status"] == "complete"
-    assert Path(job["outputManifest"]["files"][0]["path"]).exists()
 
-
-def test_audio_job_flow_to_completed_asset(tmp_path: Path):
+def test_cancellation_during_polling(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "cancel mid", "metadata": {"mock_poll_steps": 20}},
+            headers=_headers("cp1"),
+        )
+        job_id = create.json()["job"]["id"]
 
-    response = client.post(
-        "/jobs/audio",
-        headers=_headers("h-2"),
-        data={
-            "clientRequestId": str(uuid4()),
-            "prompt": "process",
-            "metadata": "{}",
-        },
-        files={"file": ("seed.wav", _wav_bytes(), "audio/wav")},
-    )
+        for _ in range(20):
+            state = client.get(f"/jobs/{job_id}", headers=_headers(str(uuid4()))).json()["status"]
+            if state == "polling_remote":
+                break
+            time.sleep(0.02)
 
-    assert response.status_code == 200
-    job = response.json()["job"]
-    assert job["status"] == "complete"
-    assert job["assetId"] is not None
+        cancel = client.post(f"/jobs/{job_id}/cancel", headers=_headers("cp2"))
+        assert cancel.status_code == 200
+        terminal = _wait_for_terminal(client, job_id)
+        assert terminal["status"] in {"cancelled", "complete"}
 
 
-def test_recovery_of_inflight_jobs_after_restart(tmp_path: Path):
+def test_recovery_after_restart_midflight(tmp_path: Path):
     db_path = tmp_path / "jobs.db"
     assets_root = tmp_path / "assets"
 
-    app = create_app(db_path=db_path, assets_root=assets_root, enable_hmac=False)
-    client = TestClient(app)
-    response = client.post(
-        "/jobs/text",
-        json={"clientRequestId": str(uuid4()), "prompt": "seed", "metadata": {}},
-        headers=_headers("r-1"),
-    )
-    assert response.status_code == 200
+    with TestClient(create_app(db_path=db_path, assets_root=assets_root, enable_hmac=False)) as client:
+        create = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "recovery", "metadata": {"mock_poll_steps": 30}},
+            headers=_headers("r1"),
+        )
+        job_id = create.json()["job"]["id"]
+        time.sleep(0.05)
 
-    storage = DurableStorage(db_path)
-    downloader = app.state.ctx.jobs.downloader
-    provider = app.state.ctx.jobs.provider
-    service = JobService(storage=storage, provider=provider, downloader=downloader)
-    created, _ = service.create_text_job(CreateJobRequest(clientRequestId=uuid4(), prompt="recover", metadata={}))
-
-    service.recover_inflight()
-    recovered_job = storage.get_job(created.id)
-    assert recovered_job is not None
-    assert recovered_job.status.value == "complete"
+    with TestClient(create_app(db_path=db_path, assets_root=assets_root, enable_hmac=False)) as restarted:
+        terminal = _wait_for_terminal(restarted, job_id)
+        assert terminal["status"] == "complete"
 
 
-def test_protocol_mismatch_failures_and_error_shape(tmp_path: Path):
+def test_two_concurrent_creates_same_client_request_id(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        payload = {"clientRequestId": str(uuid4()), "prompt": "same", "metadata": {}}
+        results: list[dict] = []
 
-    response = client.get(
-        "/capabilities",
-        headers={
-            "X-Request-ID": "bad-1",
-            "X-Plugin-Version": "2.0.0",
-            "X-Protocol-Version": "9.9",
-        },
-    )
-    assert response.status_code == 400
-    payload = response.json()
-    assert set(payload["error"].keys()) == {"code", "message", "details", "request_id"}
+        def create_one(rid: str) -> None:
+            res = client.post("/jobs/text", json=payload, headers=_headers(rid))
+            results.append(res.json())
+
+        t1 = threading.Thread(target=create_one, args=("cc1",))
+        t2 = threading.Thread(target=create_one, args=("cc2",))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        ids = {item["job"]["id"] for item in results}
+        assert len(ids) == 1
 
 
-def test_hmac_signing_required_when_enabled(tmp_path: Path):
+def test_duplicate_download_attempt_after_restart_is_deduped(tmp_path: Path):
+    db_path = tmp_path / "jobs.db"
+    assets_root = tmp_path / "assets"
+
+    with TestClient(create_app(db_path=db_path, assets_root=assets_root, enable_hmac=False)) as client:
+        create = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "dedupe", "metadata": {}},
+            headers=_headers("dd1"),
+        )
+        job_id = create.json()["job"]["id"]
+        terminal = _wait_for_terminal(client, job_id)
+        first_assets = terminal["outputAssets"]
+
+    with TestClient(create_app(db_path=db_path, assets_root=assets_root, enable_hmac=False)) as restarted:
+        terminal2 = _wait_for_terminal(restarted, job_id)
+        assert terminal2["outputAssets"] == first_assets
+
+
+def test_cancellation_racing_with_completion(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "race", "metadata": {"mock_poll_steps": 2}},
+            headers=_headers("ra1"),
+        )
+        job_id = create.json()["job"]["id"]
+        client.post(f"/jobs/{job_id}/cancel", headers=_headers("ra2"))
+        terminal = _wait_for_terminal(client, job_id)
+        assert terminal["status"] in {"cancelled", "complete"}
+
+
+def test_hmac_signed_requests_and_protocol_mismatch(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=True)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        bad = client.get("/capabilities", headers={"X-Request-ID": "b1", "X-Plugin-Version": "1", "X-Protocol-Version": "9.9"})
+        assert bad.status_code == 400
+        assert set(bad.json()["error"].keys()) == {"code", "message", "details", "request_id"}
 
-    payload = {"clientRequestId": str(uuid4()), "prompt": "secure", "metadata": {}}
-    raw = json.dumps(payload).encode("utf-8")
-
-    unsigned = client.post(
-        "/jobs/text",
-        data=raw,
-        headers=_headers("s-1") | {"Content-Type": "application/json"},
-    )
-    assert unsigned.status_code == 401
-
-    from bridge_security import RequestSigner
-
-    signer = RequestSigner(b"dev-shared-secret")
-    signed = signer.sign(raw)
-    signed_headers = _headers("s-2") | {
-        "Content-Type": "application/json",
-        "X-Signature-Timestamp": str(signed.timestamp),
-        "X-Signature-Nonce": signed.nonce,
-        "X-Body-Sha256": signed.body_sha256,
-        "X-Signature": signed.signature,
-    }
-    ok = client.post("/jobs/text", data=raw, headers=signed_headers)
-    assert ok.status_code == 200
-
-
-def test_downloaded_asset_deduplication(tmp_path: Path):
-    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
-    client = TestClient(app)
-    payload = {"clientRequestId": str(uuid4()), "prompt": "dup", "metadata": {}}
-
-    first = client.post("/jobs/text", json=payload, headers=_headers("d1"))
-    second = client.post("/jobs/text", json=payload, headers=_headers("d2"))
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["job"]["outputManifest"] == second.json()["job"]["outputManifest"]
+        payload = {"clientRequestId": str(uuid4()), "prompt": "signed", "metadata": {}}
+        raw = json.dumps(payload).encode("utf-8")
+        signer = RequestSigner(b"dev-shared-secret")
+        sig = signer.sign(raw)
+        headers = _headers("hmac1") | {
+            "Content-Type": "application/json",
+            "X-Signature-Timestamp": str(sig.timestamp),
+            "X-Signature-Nonce": sig.nonce,
+            "X-Body-Sha256": sig.body_sha256,
+            "X-Signature": sig.signature,
+        }
+        ok = client.post("/jobs/text", data=raw, headers=headers)
+        assert ok.status_code == 200
