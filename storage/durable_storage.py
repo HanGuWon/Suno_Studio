@@ -12,10 +12,12 @@ from bridge.models import IN_FLIGHT_STATES, Job, JobStatus, JobTransition, JobTy
 
 
 _ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
-    JobStatus.CREATED: {JobStatus.SUBMITTED, JobStatus.CANCELLED, JobStatus.FAILED},
-    JobStatus.SUBMITTED: {JobStatus.POLLING, JobStatus.CANCELLED, JobStatus.FAILED},
-    JobStatus.POLLING: {JobStatus.DOWNLOADING, JobStatus.CANCELLED, JobStatus.FAILED},
-    JobStatus.DOWNLOADING: {JobStatus.COMPLETE, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.CREATED: {JobStatus.QUEUED_LOCAL, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.QUEUED_LOCAL: {JobStatus.SUBMITTING_REMOTE, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.SUBMITTING_REMOTE: {JobStatus.POLLING_REMOTE, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.POLLING_REMOTE: {JobStatus.DOWNLOADING, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.DOWNLOADING: {JobStatus.COMPLETE, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.CANCELLING: {JobStatus.CANCELLED, JobStatus.FAILED},
     JobStatus.COMPLETE: set(),
     JobStatus.CANCELLED: set(),
     JobStatus.FAILED: set(),
@@ -32,7 +34,7 @@ class DurableStorage:
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -53,6 +55,10 @@ class DurableStorage:
                     remote_provider_id TEXT,
                     asset_id TEXT,
                     output_manifest_json TEXT,
+                    output_assets_json TEXT,
+                    progress REAL NOT NULL DEFAULT 0.0,
+                    last_error TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(type, client_request_id)
@@ -85,13 +91,60 @@ class DurableStorage:
                 );
                 """
             )
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-            }
-            if "asset_id" not in columns:
-                conn.execute("ALTER TABLE jobs ADD COLUMN asset_id TEXT")
-            if "output_manifest_json" not in columns:
-                conn.execute("ALTER TABLE jobs ADD COLUMN output_manifest_json TEXT")
+            self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "asset_id" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN asset_id TEXT")
+        if "output_manifest_json" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN output_manifest_json TEXT")
+        if "output_assets_json" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN output_assets_json TEXT")
+        if "progress" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN progress REAL NOT NULL DEFAULT 0.0")
+        if "last_error" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT")
+        if "attempts" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+
+    def create_job_idempotent(self, job: Job) -> tuple[Job, bool]:
+        with self._conn() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO jobs (
+                        id, type, status, client_request_id, payload_json, remote_provider_id,
+                        asset_id, output_manifest_json, output_assets_json, progress,
+                        last_error, attempts, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job.id,
+                        job.type.value,
+                        job.status.value,
+                        str(job.client_request_id),
+                        json.dumps(job.payload),
+                        job.remote_job_id,
+                        job.asset_id,
+                        json.dumps(job.output_manifest_json) if job.output_manifest_json else None,
+                        json.dumps(job.output_assets),
+                        job.progress,
+                        job.last_error,
+                        job.attempts,
+                        job.created_at.isoformat(),
+                        job.updated_at.isoformat(),
+                    ),
+                )
+                return job, True
+            except sqlite3.IntegrityError:
+                existing = conn.execute(
+                    "SELECT * FROM jobs WHERE type = ? AND client_request_id = ?",
+                    (job.type.value, str(job.client_request_id)),
+                ).fetchone()
+                if existing is None:
+                    raise
+                return _row_to_job(existing), False
 
     def get_job_by_request_id(self, job_type: JobType, client_request_id: UUID) -> Job | None:
         with self._conn() as conn:
@@ -108,35 +161,8 @@ class DurableStorage:
 
     def get_imported_asset(self, asset_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT manifest_json FROM imported_assets WHERE id = ?",
-                (asset_id,),
-            ).fetchone()
+            row = conn.execute("SELECT manifest_json FROM imported_assets WHERE id = ?", (asset_id,)).fetchone()
             return json.loads(row["manifest_json"]) if row else None
-
-    def create_job(self, job: Job) -> Job:
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO jobs (
-                    id, type, status, client_request_id, payload_json, remote_provider_id,
-                    asset_id, output_manifest_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job.id,
-                    job.type.value,
-                    job.status.value,
-                    str(job.client_request_id),
-                    json.dumps(job.payload),
-                    job.remote_provider_id,
-                    job.asset_id,
-                    json.dumps(job.output_manifest_json) if job.output_manifest_json else None,
-                    job.created_at.isoformat(),
-                    job.updated_at.isoformat(),
-                ),
-            )
-            return job
 
     def set_job_status(
         self,
@@ -144,7 +170,10 @@ class DurableStorage:
         to_status: JobStatus,
         *,
         reason: str | None = None,
-        remote_provider_id: str | None = None,
+        remote_job_id: str | None = None,
+        progress: float | None = None,
+        last_error: str | None = None,
+        attempts_increment: int = 0,
     ) -> Job:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -153,11 +182,33 @@ class DurableStorage:
             current = _row_to_job(row)
             if to_status not in _ALLOWED_TRANSITIONS[current.status] and current.status != to_status:
                 raise ValueError(f"Invalid transition {current.status.value} -> {to_status.value}")
+
             now = datetime.now(timezone.utc).isoformat()
+            next_progress = current.progress if progress is None else progress
+            next_error = current.last_error if last_error is None else last_error
+
             conn.execute(
-                "UPDATE jobs SET status = ?, remote_provider_id = COALESCE(?, remote_provider_id), updated_at = ? WHERE id = ?",
-                (to_status.value, remote_provider_id, now, job_id),
+                """
+                UPDATE jobs
+                SET status = ?,
+                    remote_provider_id = COALESCE(?, remote_provider_id),
+                    progress = ?,
+                    last_error = ?,
+                    attempts = attempts + ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    to_status.value,
+                    remote_job_id,
+                    next_progress,
+                    next_error,
+                    attempts_increment,
+                    now,
+                    job_id,
+                ),
             )
+
             transition = JobTransition(job_id=job_id, from_status=current.status, to_status=to_status, reason=reason)
             conn.execute(
                 "INSERT INTO job_transitions (job_id, from_status, to_status, occurred_at, reason) VALUES (?, ?, ?, ?, ?)",
@@ -172,12 +223,46 @@ class DurableStorage:
             refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return _row_to_job(refreshed)
 
+    def update_job_runtime_fields(
+        self,
+        job_id: str,
+        *,
+        progress: float | None = None,
+        last_error: str | None = None,
+        remote_job_id: str | None = None,
+    ) -> Job:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown job_id={job_id}")
+            current = _row_to_job(row)
+            conn.execute(
+                """
+                UPDATE jobs
+                SET progress = ?,
+                    last_error = ?,
+                    remote_provider_id = COALESCE(?, remote_provider_id),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    current.progress if progress is None else progress,
+                    current.last_error if last_error is None else last_error,
+                    remote_job_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    job_id,
+                ),
+            )
+            refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            return _row_to_job(refreshed)
+
     def attach_job_artifacts(
         self,
         job_id: str,
         *,
         asset_id: str | None = None,
         output_manifest: dict[str, Any] | None = None,
+        output_assets: list[str] | None = None,
     ) -> Job:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
@@ -189,12 +274,14 @@ class DurableStorage:
                 UPDATE jobs
                 SET asset_id = COALESCE(?, asset_id),
                     output_manifest_json = COALESCE(?, output_manifest_json),
+                    output_assets_json = COALESCE(?, output_assets_json),
                     updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     asset_id,
-                    json.dumps(output_manifest) if output_manifest else None,
+                    json.dumps(output_manifest) if output_manifest is not None else None,
+                    json.dumps(output_assets) if output_assets is not None else None,
                     now,
                     job_id,
                 ),
@@ -210,11 +297,7 @@ class DurableStorage:
                 VALUES (?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET manifest_json=excluded.manifest_json
                 """,
-                (
-                    asset_id,
-                    json.dumps(manifest),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+                (asset_id, json.dumps(manifest), datetime.now(timezone.utc).isoformat()),
             )
 
     def list_in_flight_jobs(self) -> list[Job]:
@@ -225,8 +308,16 @@ class DurableStorage:
             ).fetchall()
             return [_row_to_job(row) for row in rows]
 
+
+    def list_jobs_by_ids(self, job_ids: list[str]) -> list[Job]:
+        if not job_ids:
+            return []
+        placeholders = ",".join("?" for _ in job_ids)
+        with self._conn() as conn:
+            rows = conn.execute(f"SELECT * FROM jobs WHERE id IN ({placeholders})", tuple(job_ids)).fetchall()
+            return [_row_to_job(row) for row in rows]
+
     def record_downloaded_asset(self, *, job_id: str, variant: str, checksum: str, local_path: str) -> bool:
-        """Returns True if inserted, False if duplicate."""
         with self._conn() as conn:
             try:
                 conn.execute(
@@ -237,14 +328,6 @@ class DurableStorage:
             except sqlite3.IntegrityError:
                 return False
 
-    def list_jobs_by_ids(self, job_ids: list[str]) -> list[Job]:
-        if not job_ids:
-            return []
-        placeholders = ",".join("?" for _ in job_ids)
-        with self._conn() as conn:
-            rows = conn.execute(f"SELECT * FROM jobs WHERE id IN ({placeholders})", tuple(job_ids)).fetchall()
-            return [_row_to_job(row) for row in rows]
-
 
 def _row_to_job(row: sqlite3.Row) -> Job:
     return Job(
@@ -253,9 +336,13 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         status=JobStatus(row["status"]),
         client_request_id=UUID(row["client_request_id"]),
         payload=json.loads(row["payload_json"]),
-        remote_provider_id=row["remote_provider_id"],
+        remote_job_id=row["remote_provider_id"],
         asset_id=row["asset_id"],
         output_manifest_json=json.loads(row["output_manifest_json"]) if row["output_manifest_json"] else None,
+        output_assets=json.loads(row["output_assets_json"]) if row["output_assets_json"] else [],
+        progress=float(row["progress"] or 0.0),
+        last_error=row["last_error"],
+        attempts=int(row["attempts"] or 0),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
