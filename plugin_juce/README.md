@@ -1,31 +1,33 @@
-# plugin_juce scaffold
+# plugin_juce
 
-This folder contains the first thin JUCE client scaffold for the async bridge runtime.
+Thin JUCE client layer on top of the async Python bridge.
 
-## What is implemented
+## Included targets
 
-- Shared C++ bridge client layer (`BridgeDiscovery`, `BridgeHttpClient`, `PluginStateStore`).
-- JUCE plugin shell targets (VST3 + AU) and a standalone GUI app target.
-- UI contract shell for connection, create, audio import, job status, preview, and drag export.
+- `SunoStudioBridgePlugin` (VST3/AU scaffold)
+- `SunoStudioBridgeStandalone` (primary debug surface in this phase)
+- shared static lib: `bridge_client`
 
-## What is not implemented yet
+## Shared client responsibilities
 
-- Full polished JUCE UX and production visuals.
-- Real Suno provider automation.
-- Universal DAW auto-insert.
-- ARA runtime.
+- lockfile discovery support
+- dev-mode explicit endpoint support
+- protocol handshake (`/capabilities`)
+- HMAC header envelope emission
+- JSON + multipart bridge calls
+- canonical error parsing
+- state persistence
 
-## Build prerequisites
+## Important limitations
 
-- CMake 3.22+
-- C++17 compiler
-- JUCE provided externally (not vendored in this repo)
+- JUCE keychain integration for shared-secret retrieval is not complete.
+  - discovery mode can still use manual shared-secret override.
+- This phase does not include real Suno automation.
+- This phase does not include universal DAW auto-insert or full ARA runtime.
 
-Example configure:
+## Build
 
 ```bash
 cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
 cmake --build build/plugin_juce
 ```
-
-If AU target is not available in your environment, VST3/standalone remain the intended debug path.

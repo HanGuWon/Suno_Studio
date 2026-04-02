@@ -16,6 +16,7 @@ add_library(bridge_client STATIC
   src/BridgeDiscovery.cpp
   src/BridgeHttpClient.cpp
   src/PluginStateStore.cpp
+  src/BridgeController.cpp
 )
 
 target_include_directories(bridge_client PUBLIC include)
@@ -26,6 +27,8 @@ target_link_libraries(bridge_client
     juce::juce_events
     juce::juce_data_structures
     juce::juce_audio_formats
+    juce::juce_cryptography
+    juce::juce_gui_basics
 )
 
 juce_add_plugin(SunoStudioBridgePlugin

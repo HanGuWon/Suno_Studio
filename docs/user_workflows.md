@@ -1,25 +1,27 @@
 # User workflows (current phase)
 
-## 1) Text to audio (generic host)
-1. Open plugin.
+## 1) Text-to-audio (standalone/plugin)
+1. Connect to bridge (discovery mode or dev mode).
 2. Enter prompt and mode.
-3. Submit job.
-4. Poll status in job list.
-5. Preview generated file.
-6. Drag generated WAV from plugin to DAW timeline.
+3. Submit text job.
+4. Poll status until terminal state.
+5. Preview output file.
+6. Drag output file into DAW/OS (generic workflow).
 
-## 2) Audio prompt to audio
-1. Drop local audio file in plugin or choose file.
-2. Plugin imports file into bridge (`/assets/import`).
-3. Plugin submits `/jobs/audio` with returned `assetId`.
-4. Poll status, preview result, drag into DAW.
+## 2) Audio-prompt-to-audio
+1. Choose local audio file.
+2. Client uploads through `/assets/import`.
+3. Client submits `/jobs/audio` using returned `assetId`.
+4. Poll status and inspect output files.
+5. Preview/reveal/drag output.
 
-## 3) REAPER assisted insertion
-1. Generate output.
-2. Run `insert_generated_file_at_cursor.lua`.
-3. Choose generated file.
-4. Script inserts media at edit cursor.
+## 3) REAPER assisted handoff (manual PoC)
+1. Generate output in client.
+2. Copy/reveal output path from client.
+3. Run `insert_generated_file_at_cursor.lua` in REAPER.
+4. Select generated file and insert at edit cursor.
 
-## Important constraints
-- Universal auto-insert across all DAWs is **not implemented**.
-- REAPER automation is proof-of-concept only.
+## Constraints
+- Universal auto-insert across DAWs is not implemented.
+- REAPER automation is script-assisted/manual in this phase.
+- Real Suno automation is not implemented.

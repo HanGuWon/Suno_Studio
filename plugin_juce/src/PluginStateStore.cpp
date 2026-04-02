@@ -23,6 +23,8 @@ PluginState PluginStateStore::load() const
     state.soundLoop = static_cast<bool>(obj->getProperty("soundLoop"));
     state.bpmHint = static_cast<int>(obj->getProperty("bpmHint"));
     state.keyHint = obj->getProperty("keyHint").toString();
+    state.lastSelectedOutputPath = obj->getProperty("lastSelectedOutputPath").toString();
+    state.lastActiveJobId = obj->getProperty("lastActiveJobId").toString();
 
     if (auto recentJobs = obj->getProperty("recentJobIds"); recentJobs.isArray())
         for (const auto& value : *recentJobs.getArray())
@@ -47,6 +49,8 @@ void PluginStateStore::save(const PluginState& state) const
     root.setProperty("soundLoop", state.soundLoop);
     root.setProperty("bpmHint", state.bpmHint);
     root.setProperty("keyHint", state.keyHint);
+    root.setProperty("lastSelectedOutputPath", state.lastSelectedOutputPath);
+    root.setProperty("lastActiveJobId", state.lastActiveJobId);
 
     juce::Array<juce::var> recentJobs;
     for (const auto& id : state.recentJobIds)
