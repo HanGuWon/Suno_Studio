@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/hostCapabilityService.test.mjs"
+    "test": "node tests/hostCapabilityService.test.mjs && node tests/reaperAdapterContracts.test.mjs"
   }
 }

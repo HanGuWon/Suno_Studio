@@ -1,32 +1,20 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
-from bridge.models import CreateJobRequest, Job, JobStatus, JobType
-from storage.durable_storage import DurableStorage
+from bridge.models import CreateJobRequest, Job
+from bridge.services.job_service import JobService
 
 
 class BridgeAPI:
-    def __init__(self, storage: DurableStorage) -> None:
-        self.storage = storage
+    """Programmatic API used by tests and non-HTTP callers."""
+
+    def __init__(self, job_service: JobService) -> None:
+        self.job_service = job_service
 
     def post_jobs_text(self, request: CreateJobRequest) -> tuple[Job, bool]:
-        return self._create_idempotent_job(job_type=JobType.TEXT, request=request)
+        return self.job_service.create_text_job(request)
 
-    def post_jobs_audio(self, request: CreateJobRequest) -> tuple[Job, bool]:
-        return self._create_idempotent_job(job_type=JobType.AUDIO, request=request)
+    def post_jobs_audio(self, request: CreateJobRequest, *, asset_id: str | None = None) -> tuple[Job, bool]:
+        return self.job_service.create_audio_job(request, asset_id=asset_id)
 
-    def _create_idempotent_job(self, *, job_type: JobType, request: CreateJobRequest) -> tuple[Job, bool]:
-        existing = self.storage.get_job_by_request_id(job_type, request.clientRequestId)
-        if existing:
-            return existing, False
-
-        job = Job(
-            id=str(uuid4()),
-            type=job_type,
-            status=JobStatus.CREATED,
-            client_request_id=request.clientRequestId,
-            payload={"prompt": request.prompt, "metadata": request.metadata},
-        )
-        self.storage.create_job(job)
-        return job, True
+    def post_cancel_job(self, job_id: str) -> Job:
+        return self.job_service.cancel_job(job_id)
