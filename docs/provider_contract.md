@@ -1,97 +1,62 @@
-# Provider Contract
+# Provider Contract (Bridge Runtime Baseline)
 
-This document defines the provider-facing contract for bridge-compatible plug-ins.
+This document defines the current bridge contract used by plugin/standalone clients in this repository.
 
-## 1) Transport, Authentication, and Startup Discovery
+## Transport and discovery
 
-### Transport
-Providers MUST expose one of the following transports:
+- Transport: HTTP loopback only (`http://127.0.0.1:<port>`).
+- Discovery order:
+  1. explicit dev config (host/port/secret)
+  2. bridge lockfile discovery
+  3. default dev fallback (`127.0.0.1:7071`)
 
-1. HTTP on loopback: `http://127.0.0.1:<port>`
-2. gRPC on loopback: `127.0.0.1:<port>`
+## Auth model (current baseline)
 
-HTTP is the baseline requirement. gRPC MAY be offered in addition.
+Plugin/standalone clients sign requests with HMAC-SHA256 headers:
 
-### Authentication model
-The default model is local-process trust (loopback only). If auth is enabled, providers MUST accept a static bearer token configured at startup (`Authorization: Bearer <token>`).
+- `X-Signature-Timestamp`
+- `X-Signature-Nonce`
+- `X-Body-Sha256`
+- `X-Signature`
 
-### Startup discovery
-Plug-ins discover the provider endpoint in this order:
+Signature formula:
 
-1. Explicit runtime configuration (CLI/env)
-2. Provider-written discovery file (JSON) containing host/port/transport
-3. Built-in default (`http://127.0.0.1:7000`)
+`signature = HMAC_SHA256(shared_secret, "{timestamp}.{nonce}.{body_sha256}")`
 
-Before first job submission, plug-ins MUST call the capability handshake endpoint and validate protocol compatibility.
+No bearer-token baseline is used for plugin↔bridge in this phase.
 
-## 2) Required Headers
+## Required headers
 
-Every request from plug-in to bridge/provider MUST include:
+All requests include:
 
-- `X-Plugin-Version`: semantic version for the plug-in build (example: `2.4.1`)
-- `X-Protocol-Version`: semantic version used by this request (example: `1.3`)
-- `X-Request-ID`: unique, opaque request ID for tracing
+- `X-Plugin-Version`
+- `X-Protocol-Version`
+- `X-Request-ID`
 
-For gRPC, use metadata keys with the same names.
+## Handshake
 
-## 3) Version Handshake Endpoint
+Clients call `GET /capabilities` before first job submission and enforce protocol range checks.
 
-`GET /capabilities` MUST return provider capabilities and supported protocol range.
+## Endpoint contract used by client layer
 
-### Response shape
+- `GET /capabilities`
+- `POST /jobs/text` (JSON)
+- `POST /assets/import` (multipart/form-data)
+- `POST /jobs/audio` (multipart/form-data)
+- `GET /jobs/{job_id}`
+- `POST /jobs/{job_id}/cancel`
 
-```json
-{
-  "provider": "bridge",
-  "provider_version": "3.2.0",
-  "protocol": {
-    "min_supported": "1.2",
-    "max_supported": "1.3",
-    "recommended": "1.3"
-  },
-  "features": ["submit_job", "cancel_job"]
-}
-```
-
-## 4) Compatibility Policy
-
-Providers MUST support protocol major `N` and `N-1` at minimum for rolling upgrades.
-
-- If client protocol is within `[min_supported, max_supported]`, request proceeds.
-- If lower than `min_supported`, fail with upgrade guidance.
-- If higher than `max_supported`, fail with downgrade/provider-upgrade guidance.
-
-Outside the range, the provider MUST hard-fail with a canonical error payload.
-
-## 5) Canonical Error Schema
-
-All non-2xx responses MUST use the canonical schema:
+## Canonical error payload
 
 ```json
 {
   "error": {
     "code": "PROTOCOL_VERSION_UNSUPPORTED",
-    "message": "Protocol 1.1 is not supported. Supported range is 1.2-1.3.",
-    "details": {
-      "requested": "1.1",
-      "min_supported": "1.2",
-      "max_supported": "1.3",
-      "action": "Upgrade plugin protocol to >=1.2"
-    },
-    "request_id": "d793f2b0-..."
+    "message": "...",
+    "details": {},
+    "request_id": "..."
   }
 }
 ```
 
-### Stable error codes
-
-- `PROTOCOL_VERSION_MISSING`
-- `PROTOCOL_VERSION_INVALID`
-- `PROTOCOL_VERSION_UNSUPPORTED`
-- `PLUGIN_VERSION_MISSING`
-- `REQUEST_ID_MISSING`
-- `AUTH_REQUIRED`
-- `AUTH_INVALID`
-- `INTERNAL_ERROR`
-
-Codes are stable and machine-readable; clients SHOULD branch on `error.code`, not message text.
+Clients should branch on `error.code`, not free-form message text.

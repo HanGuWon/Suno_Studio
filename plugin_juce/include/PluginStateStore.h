@@ -14,6 +14,8 @@ struct PluginState
     bool soundLoop { false };
     int bpmHint { 120 };
     juce::String keyHint { "Am" };
+    juce::String lastSelectedOutputPath;
+    juce::String lastActiveJobId;
 };
 
 class PluginStateStore

@@ -1,83 +1,84 @@
-# Suno Studio — Async Bridge + Plugin Client Shell
+# Suno Studio — Async Bridge + JUCE Client Convergence
 
-This repository now includes:
-- Async local bridge runtime (Python/FastAPI).
-- Thin JUCE plugin/standalone client scaffold for DAW-facing UX contract testing.
+This repo currently provides:
 
-## Implemented now
+1. Async Python bridge runtime (mock-provider backed).
+2. JUCE plugin + standalone client shell wired to the bridge contract.
 
-### Async bridge runtime
-- `GET /capabilities`
-- `POST /jobs/text`
-- `POST /jobs/audio`
+## Bridge source of truth
+
+Current client implementation targets these bridge endpoints and payload types:
+
+- `GET /capabilities` (handshake)
+- `POST /jobs/text` (JSON)
+- `POST /assets/import` (multipart/form-data)
+- `POST /jobs/audio` (multipart/form-data)
 - `GET /jobs/{job_id}`
 - `POST /jobs/{job_id}/cancel`
-- `POST /assets/import`
-- Background orchestration worker with durable recovery.
-- HMAC/protocol middleware and canonical error structure.
-- Deterministic mock provider backend.
 
-### Plugin client shell (new)
-- `plugin_juce/` CMake scaffold for:
-  - VST3 plugin target
-  - AU target (when supported by environment)
-  - Standalone debug app target
-- Shared C++ bridge client shell:
-  - discovery + handshake
-  - text job submission
-  - asset import
-  - audio job submission
-  - status polling
-  - cancellation
-- Plugin state persistence shell (recent jobs/request IDs/asset IDs/preferences).
-- REAPER proof-of-concept adapter scripts.
+Plugin/standalone requests include protocol headers and HMAC envelope headers expected by the bridge.
 
-## What remains future work
+## What the client can do now
 
-- Real Suno provider adapter (beyond mock).
-- Universal DAW auto-insert.
-- Full ARA runtime integration.
-- Other host-specific adapters beyond REAPER PoC.
+- Connect to bridge (discovery mode or dev mode).
+- Submit text jobs.
+- Import local audio file and submit audio job.
+- Poll async job status.
+- Display output files.
+- Preview output audio.
+- Reveal output in file browser.
+- Drag/copy output path for DAW handoff.
 
-## Generic vs host-specific behavior
+## REAPER PoC
 
-### Generic (all hosts)
-- Generate in plugin
-- Preview
-- Drag result to DAW timeline / OS
+Manual assisted scripts are provided under `host_adapters/reaper/`:
+- insert generated file at cursor
+- prepare export range from time selection/selected item
 
-### REAPER-specific PoC
-- Insert generated file at cursor via script
-- Prepare export range from time selection/selected item
+This is **not** universal auto-insert.
 
-## Build / setup
+## Not implemented in this phase
+
+- Real Suno browser/session automation
+- Universal DAW timeline auto-insert
+- Full ARA runtime
+
+## Build/setup
 
 ### Python bridge
+
 ```bash
 python -m pip install -e .
 python -m bridge.main
 ```
 
-### JUCE scaffold
-JUCE is not vendored. Provide JUCE externally.
+### JUCE client
+
+JUCE is not vendored; provide it externally.
 
 ```bash
 cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
 cmake --build build/plugin_juce
 ```
 
-## Tests run in this environment
-- Pure logic/runtime tests only.
-- JUCE binaries were **not built** in this environment.
+## Tests run
 
 ```bash
-node tests/hostCapabilityService.test.mjs
+npm test
+pytest -q
 ```
 
-(Bridge Python tests may require Python 3.11+ because project metadata requires `>=3.11`.)
+## Important build reality
 
-## Additional docs
+- In this environment, JUCE binaries were **not** compiled.
+- Bridge/client contract tests and runtime tests were run.
+
+## Docs
+
 - `docs/plugin_client_architecture.md`
-- `docs/reaper_adapter.md`
 - `docs/user_workflows.md`
+- `docs/reaper_adapter.md`
 - `docs/ara_plan.md`
+- `docs/security.md`
+- `docs/provider_contract.md`
+- `docs/ipc_contract.md`

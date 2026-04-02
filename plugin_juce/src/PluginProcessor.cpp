@@ -1,6 +1,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include "BridgeController.h"
+
 class SunoStudioBridgeProcessor : public juce::AudioProcessor
 {
 public:
@@ -33,12 +35,18 @@ class SunoStudioBridgeEditor : public juce::AudioProcessorEditor,
 {
 public:
     explicit SunoStudioBridgeEditor(SunoStudioBridgeProcessor& p)
-        : juce::AudioProcessorEditor(&p), processor(p)
+        : juce::AudioProcessorEditor(&p),
+          processor(p),
+          controller(
+              suno::bridge::PluginStateStore(
+                  juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                      .getChildFile("SunoStudio/plugin_client_state.json")),
+              suno::bridge::ClientConfig())
     {
         formatManager.registerBasicFormats();
 
-        setSize(760, 560);
-        configureLabel(statusLabel, "Bridge: disconnected (scaffold)");
+        setSize(840, 600);
+        configureLabel(statusLabel, "Bridge: disconnected");
         configureLabel(hostModeLabel, "Host mode: Generic Drag / REAPER Assisted / ARA Planned");
 
         modeBox.addItem("Song", 1);
@@ -51,15 +59,28 @@ public:
         promptEditor.setTextToShowWhenEmpty("Type prompt...", juce::Colours::grey);
         addAndMakeVisible(promptEditor);
 
+        configureButton(connectButton, "Connect (Discovery)");
+        configureButton(devConnectButton, "Connect Dev");
         configureButton(submitButton, "Submit Text Job");
         configureButton(cancelButton, "Cancel Active Job");
-        configureButton(importButton, "Import Audio Prompt");
-        configureButton(selectResultButton, "Select Result File");
+        configureButton(importButton, "Import + Submit Audio Job");
         configureButton(previewButton, "Preview/Stop");
-        configureButton(dragButton, "Drag Result Out");
-        configureButton(revealButton, "Reveal In Folder");
+        configureButton(dragButton, "Drag Selected Output");
+        configureButton(revealButton, "Reveal Output");
+        configureButton(copyPathButton, "Copy Output Path");
 
-        addAndMakeVisible(jobList);
+        addAndMakeVisible(outputList);
+        outputList.onChange = [this]
+        {
+            if (outputList.getSelectedId() > 0)
+            {
+                auto path = outputList.getItemText(outputList.getSelectedItemIndex());
+                controller.selectOutputFile(path);
+                selectedResultFile = juce::File(path);
+                loadPreview(selectedResultFile);
+            }
+        };
+
         startTimerHz(4);
     }
 
@@ -79,17 +100,19 @@ public:
         promptEditor.setBounds(area.removeFromTop(120));
 
         auto row1 = area.removeFromTop(30);
+        connectButton.setBounds(row1.removeFromLeft(150));
+        devConnectButton.setBounds(row1.removeFromLeft(120));
         submitButton.setBounds(row1.removeFromLeft(150));
-        cancelButton.setBounds(row1.removeFromLeft(150));
-        importButton.setBounds(row1.removeFromLeft(170));
+        cancelButton.setBounds(row1.removeFromLeft(140));
 
         auto row2 = area.removeFromTop(30);
-        selectResultButton.setBounds(row2.removeFromLeft(150));
+        importButton.setBounds(row2.removeFromLeft(220));
         previewButton.setBounds(row2.removeFromLeft(120));
-        dragButton.setBounds(row2.removeFromLeft(130));
+        dragButton.setBounds(row2.removeFromLeft(170));
         revealButton.setBounds(row2.removeFromLeft(130));
+        copyPathButton.setBounds(row2.removeFromLeft(120));
 
-        jobList.setBounds(area);
+        outputList.setBounds(area);
     }
 
 private:
@@ -108,43 +131,96 @@ private:
 
     void buttonClicked(juce::Button* button) override
     {
-        if (button == &submitButton)
-            statusLabel.setText("Text job submitted (scaffold)", juce::dontSendNotification);
+        if (button == &connectButton)
+            connectDiscovery();
+        else if (button == &devConnectButton)
+            connectDev();
+        else if (button == &submitButton)
+            submitText();
         else if (button == &cancelButton)
-            statusLabel.setText("Cancel requested (scaffold)", juce::dontSendNotification);
+            cancelActive();
         else if (button == &importButton)
-            importAudioPrompt();
-        else if (button == &selectResultButton)
-            selectResultFile();
+            importAndSubmitAudio();
         else if (button == &previewButton)
             togglePreview();
         else if (button == &dragButton)
             dragSelectedResult();
         else if (button == &revealButton)
             revealSelectedResult();
+        else if (button == &copyPathButton)
+            copyOutputPath();
     }
 
     void timerCallback() override
     {
-        // TODO: poll bridge job status and refresh list from async runtime endpoints.
+        juce::String error;
+        if (controller.pollActive(error))
+            refreshOutputList();
     }
 
-    void importAudioPrompt()
+    void connectDiscovery()
+    {
+        auto lockfile = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(".suno_studio/bridge.lock");
+        juce::String error;
+        if (controller.connectWithDiscovery(lockfile, {}, error))
+            statusLabel.setText("Bridge connected (discovery)", juce::dontSendNotification);
+        else
+            statusLabel.setText("Connect failed: " + error, juce::dontSendNotification);
+    }
+
+    void connectDev()
+    {
+        juce::String error;
+        if (controller.connectDev("127.0.0.1", 7071, "dev-shared-secret", error))
+            statusLabel.setText("Bridge connected (dev)", juce::dontSendNotification);
+        else
+            statusLabel.setText("Dev connect failed: " + error, juce::dontSendNotification);
+    }
+
+    void submitText()
+    {
+        juce::String error;
+        juce::DynamicObject metadata;
+        metadata.setProperty("clientMode", modeBox.getText());
+        if (controller.submitText(promptEditor.getText(), juce::var(&metadata), error))
+            statusLabel.setText("Text job submitted", juce::dontSendNotification);
+        else
+            statusLabel.setText("Submit failed: " + error, juce::dontSendNotification);
+    }
+
+    void importAndSubmitAudio()
     {
         juce::FileChooser chooser("Select local audio prompt file");
-        if (chooser.browseForFileToOpen())
-            statusLabel.setText("Audio prompt selected: " + chooser.getResult().getFileName(), juce::dontSendNotification);
-    }
-
-    void selectResultFile()
-    {
-        juce::FileChooser chooser("Select generated result file");
         if (! chooser.browseForFileToOpen())
             return;
 
-        selectedResultFile = chooser.getResult();
-        statusLabel.setText("Selected result: " + selectedResultFile.getFileName(), juce::dontSendNotification);
-        loadPreview(selectedResultFile);
+        juce::String error;
+        juce::DynamicObject metadata;
+        metadata.setProperty("clientMode", "audio_prompt");
+        if (controller.importAndSubmitAudio(chooser.getResult(), promptEditor.getText(), juce::var(&metadata), error))
+            statusLabel.setText("Audio job submitted", juce::dontSendNotification);
+        else
+            statusLabel.setText("Audio submit failed: " + error, juce::dontSendNotification);
+    }
+
+    void cancelActive()
+    {
+        juce::String error;
+        if (controller.cancelActive(error))
+            statusLabel.setText("Cancel requested", juce::dontSendNotification);
+        else
+            statusLabel.setText("Cancel failed: " + error, juce::dontSendNotification);
+    }
+
+    void refreshOutputList()
+    {
+        outputList.clear(juce::dontSendNotification);
+        int idx = 1;
+        for (const auto& file : controller.getOutputFiles())
+            outputList.addItem(file, idx++);
+
+        auto active = controller.getActiveJob();
+        statusLabel.setText("Job " + active.id + " | " + active.status + " | " + juce::String(active.progress), juce::dontSendNotification);
     }
 
     void loadPreview(const juce::File& file)
@@ -160,34 +236,22 @@ private:
     void togglePreview()
     {
         if (! selectedResultFile.existsAsFile())
-        {
-            statusLabel.setText("No selected result file", juce::dontSendNotification);
             return;
-        }
 
         if (transportSource.isPlaying())
-        {
             transportSource.stop();
-            statusLabel.setText("Preview stopped", juce::dontSendNotification);
-            return;
+        else
+        {
+            transportSource.setPosition(0.0);
+            transportSource.start();
         }
-
-        transportSource.setPosition(0.0);
-        transportSource.start();
-        statusLabel.setText("Preview started", juce::dontSendNotification);
     }
 
     void dragSelectedResult()
     {
         if (! selectedResultFile.existsAsFile())
-        {
-            statusLabel.setText("No selected result file", juce::dontSendNotification);
             return;
-        }
-
-        const juce::StringArray files { selectedResultFile.getFullPathName() };
-        performExternalDragDropOfFiles(files, false);
-        statusLabel.setText("External drag started", juce::dontSendNotification);
+        performExternalDragDropOfFiles({ selectedResultFile.getFullPathName() }, false);
     }
 
     void revealSelectedResult()
@@ -196,20 +260,29 @@ private:
             selectedResultFile.revealToUser();
     }
 
+    void copyOutputPath()
+    {
+        if (selectedResultFile.existsAsFile())
+            juce::SystemClipboard::copyTextToClipboard(selectedResultFile.getFullPathName());
+    }
+
     SunoStudioBridgeProcessor& processor;
+    suno::bridge::BridgeController controller;
 
     juce::Label statusLabel;
     juce::Label hostModeLabel;
     juce::ComboBox modeBox;
     juce::TextEditor promptEditor;
+    juce::TextButton connectButton;
+    juce::TextButton devConnectButton;
     juce::TextButton submitButton;
     juce::TextButton cancelButton;
     juce::TextButton importButton;
-    juce::TextButton selectResultButton;
     juce::TextButton previewButton;
     juce::TextButton dragButton;
     juce::TextButton revealButton;
-    juce::ListBox jobList;
+    juce::TextButton copyPathButton;
+    juce::ComboBox outputList;
 
     juce::File selectedResultFile;
     juce::AudioFormatManager formatManager;

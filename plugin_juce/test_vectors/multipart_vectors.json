@@ -1,0 +1,11 @@
+{
+  "asset_import": {
+    "required_fields": ["normalizeOnImport", "file"],
+    "content_type_prefix": "multipart/form-data; boundary="
+  },
+  "audio_job": {
+    "required_fields": ["clientRequestId", "prompt", "metadata"],
+    "optional_fields": ["assetId", "file"],
+    "content_type_prefix": "multipart/form-data; boundary="
+  }
+}
