@@ -10,12 +10,19 @@ struct PluginState
     juce::StringArray recentJobIds;
     juce::StringArray pendingRequestIds;
     juce::StringArray recentAssetIds;
-    juce::String mode { "song" };
+    ClientMode mode { ClientMode::Song };
+    ProviderMode providerMode { ProviderMode::MockSuno };
+    juce::Array<RequestedOutputFamily> requestedOutputs { RequestedOutputFamily::Mix };
+    bool soundOneShot { true };
     bool soundLoop { false };
     int bpmHint { 120 };
     juce::String keyHint { "Am" };
     juce::String lastSelectedOutputPath;
     juce::String lastActiveJobId;
+    juce::String lastHandoffJobId;
+    juce::File lastHandoffWorkspace;
+    juce::File lastHandoffInstructions;
+    juce::var lastImportedFamilies;
 };
 
 class PluginStateStore

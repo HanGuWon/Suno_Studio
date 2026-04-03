@@ -1,9 +1,13 @@
 # REAPER proof-of-concept adapter
 
-The REAPER workflow remains manual-assisted and separate from provider logic.
+REAPER integration remains manual-assisted and intentionally separate from provider workflows.
 
-- You can use outputs from either `mock_suno` jobs or `manual_suno` imported results.
-- Client still provides reveal/copy-path handoff.
-- REAPER scripts insert/export ranges; they do not automate provider generation.
+- Works with outputs from both `mock_suno` and `manual_suno` imported results.
+- JUCE client provides reveal/copy/drag handoff only.
+- REAPER scripts assist export/import at cursor.
 
-No universal DAW auto-insert is claimed.
+Not in scope here:
+
+- universal DAW auto-insert
+- automatic timeline placement across hosts
+- provider automation inside REAPER

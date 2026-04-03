@@ -13,6 +13,36 @@ struct DiscoveryInfo
     bool hmacRequired { true };
 };
 
+enum class ProviderMode
+{
+    MockSuno,
+    ManualSuno,
+};
+
+enum class ClientMode
+{
+    Song,
+    Sound,
+    AudioPrompt,
+};
+
+enum class RequestedOutputFamily
+{
+    Mix,
+    Stems,
+    TempoLockedStems,
+    Midi,
+};
+
+struct HandoffInfo
+{
+    juce::String jobId;
+    ProviderMode providerMode { ProviderMode::MockSuno };
+    juce::File workspace;
+    juce::File instructionsPath;
+    juce::var handoff;
+};
+
 struct JobSummary
 {
     juce::String id;
@@ -22,6 +52,9 @@ struct JobSummary
     float progress { 0.0f };
     juce::String lastError;
     juce::StringArray outputAssets;
+    juce::var outputManifest;
+    ProviderMode providerMode { ProviderMode::MockSuno };
+    juce::var providerMetadata;
 };
 
 struct ClientConfig
@@ -30,4 +63,17 @@ struct ClientConfig
     juce::String protocolVersion { "1.3" };
     juce::String sharedSecret { "dev-shared-secret" };
 };
+
+juce::String toApiString(ProviderMode mode);
+juce::String toApiString(ClientMode mode);
+juce::String toApiString(RequestedOutputFamily family);
+
+ProviderMode providerModeFromString(const juce::String& value);
+ClientMode clientModeFromString(const juce::String& value);
+RequestedOutputFamily requestedOutputFamilyFromString(const juce::String& value);
+
+juce::StringArray requestedOutputsToApi(const juce::Array<RequestedOutputFamily>& families);
+juce::Array<RequestedOutputFamily> requestedOutputsFromApi(const juce::var& values);
+
+bool isManualWaitingState(const juce::String& status);
 } // namespace suno::bridge
