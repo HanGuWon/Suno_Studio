@@ -4,9 +4,6 @@ project(SunoStudioPluginClient VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# JUCE must be provided externally, e.g.:
-# -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
-# or add_subdirectory(/path/to/JUCE)
 find_package(juce CONFIG QUIET)
 if(NOT juce_FOUND)
   message(FATAL_ERROR "JUCE not found. See plugin_juce/README.md for setup instructions.")
@@ -14,9 +11,11 @@ endif()
 
 add_library(bridge_client STATIC
   src/BridgeDiscovery.cpp
+  src/BridgeModels.cpp
   src/BridgeHttpClient.cpp
   src/PluginStateStore.cpp
   src/BridgeController.cpp
+  src/BridgeClientSurface.cpp
 )
 
 target_include_directories(bridge_client PUBLIC include)
@@ -29,6 +28,7 @@ target_link_libraries(bridge_client
     juce::juce_audio_formats
     juce::juce_cryptography
     juce::juce_gui_basics
+    juce::juce_gui_extra
 )
 
 juce_add_plugin(SunoStudioBridgePlugin
@@ -52,7 +52,6 @@ target_sources(SunoStudioBridgePlugin PRIVATE
 target_link_libraries(SunoStudioBridgePlugin PRIVATE
   bridge_client
   juce::juce_audio_utils
-  juce::juce_gui_extra
 )
 
 juce_add_gui_app(SunoStudioBridgeStandalone
@@ -65,5 +64,8 @@ target_sources(SunoStudioBridgeStandalone PRIVATE
 
 target_link_libraries(SunoStudioBridgeStandalone PRIVATE
   bridge_client
-  juce::juce_gui_extra
 )
+
+juce_add_console_app(BridgeContractVectors PRODUCT_NAME "BridgeContractVectors")
+target_sources(BridgeContractVectors PRIVATE tests/BridgeContractVectors.cpp)
+target_link_libraries(BridgeContractVectors PRIVATE bridge_client)

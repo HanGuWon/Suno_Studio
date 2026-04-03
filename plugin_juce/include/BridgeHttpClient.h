@@ -4,18 +4,40 @@
 
 namespace suno::bridge
 {
+struct JobCreateOptions
+{
+    ProviderMode providerMode { ProviderMode::MockSuno };
+    ClientMode mode { ClientMode::Song };
+    juce::Array<RequestedOutputFamily> requestedOutputs { RequestedOutputFamily::Mix };
+    bool oneShot { true };
+    bool loop { false };
+    int bpm { 120 };
+    juce::String key { "Am" };
+    juce::var metadata;
+};
+
+struct ManualCompleteFiles
+{
+    juce::Array<juce::File> mixFiles;
+    juce::Array<juce::File> stemFiles;
+    juce::Array<juce::File> tempoLockedStemFiles;
+    juce::Array<juce::File> midiFiles;
+};
+
 class BridgeHttpClient
 {
 public:
     BridgeHttpClient(DiscoveryInfo discovery, ClientConfig config);
 
     bool handshake(juce::String& errorOut);
-    bool createTextJob(const juce::String& prompt, const juce::var& metadata, JobSummary& outJob, juce::String& errorOut);
+    bool createTextJob(const juce::String& prompt, const JobCreateOptions& options, JobSummary& outJob, juce::String& errorOut);
     bool importAsset(const juce::File& source, bool normalizeOnImport, juce::String& outAssetId, juce::String& errorOut);
-    bool createAudioJob(const juce::String& assetId, const juce::String& prompt, const juce::var& metadata, JobSummary& outJob, juce::String& errorOut);
-    bool createAudioJobWithFile(const juce::File& source, const juce::String& prompt, const juce::var& metadata, JobSummary& outJob, juce::String& errorOut);
+    bool createAudioJob(const juce::String& assetId, const juce::String& prompt, const JobCreateOptions& options, JobSummary& outJob, juce::String& errorOut);
+    bool createAudioJobWithFile(const juce::File& source, const juce::String& prompt, const JobCreateOptions& options, JobSummary& outJob, juce::String& errorOut);
     bool getJob(const juce::String& jobId, JobSummary& outJob, juce::String& errorOut);
     bool cancelJob(const juce::String& jobId, JobSummary& outJob, juce::String& errorOut);
+    bool getHandoff(const juce::String& jobId, HandoffInfo& outHandoff, juce::String& errorOut);
+    bool manualComplete(const juce::String& jobId, const ManualCompleteFiles& files, JobSummary& outJob, juce::String& errorOut);
 
 private:
     struct HttpResponse
@@ -48,7 +70,10 @@ private:
                         juce::String& errorOut);
 
     bool parseJobFromPayload(const juce::var& payload, JobSummary& outJob, juce::String& errorOut) const;
+    bool parseHandoffFromPayload(const juce::var& payload, HandoffInfo& outHandoff, juce::String& errorOut) const;
     bool parseErrorPayload(const juce::var& payload, juce::String& errorOut) const;
+
+    juce::var buildMetadata(const JobCreateOptions& options) const;
 
     juce::String buildSignature(const juce::String& timestamp,
                                 const juce::String& nonce,

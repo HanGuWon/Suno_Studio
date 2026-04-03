@@ -1,0 +1,18 @@
+{
+  "provider_modes": ["mock_suno", "manual_suno"],
+  "manual_waiting_states": [
+    "awaiting_manual_provider_submission",
+    "awaiting_manual_provider_result",
+    "importing_provider_result"
+  ],
+  "requested_outputs": ["mix", "stems", "tempo_locked_stems", "midi"],
+  "manual_complete_fields": ["mixFiles", "stemFiles", "tempoLockedStemFiles", "midiFiles"],
+  "canonical_error_shape": {
+    "error": {
+      "code": "HANDOFF_NOT_READY",
+      "message": "Manual handoff package has not been prepared yet.",
+      "details": {"jobId": "<job-id>"},
+      "request_id": "<request-id>"
+    }
+  }
+}
