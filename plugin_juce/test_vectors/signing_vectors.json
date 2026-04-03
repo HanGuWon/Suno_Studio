@@ -1,0 +1,16 @@
+{
+  "description": "Golden vectors for plugin_juce HMAC parity against Python RequestSigner semantics",
+  "shared_secret": "dev-shared-secret",
+  "cases": [
+    {
+      "timestamp": 1712000000,
+      "nonce": "fixed-nonce-1",
+      "body": "{\"hello\":\"world\"}"
+    },
+    {
+      "timestamp": 1712000001,
+      "nonce": "fixed-nonce-2",
+      "body": ""
+    }
+  ]
+}

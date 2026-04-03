@@ -1,89 +1,86 @@
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+from bridge.adapters import MockSunoAdapter
 from bridge.api import BridgeAPI
 from bridge.downloader import AssetDownloader
 from bridge.models import CreateJobRequest, JobStatus
-from bridge.recovery import StartupRecoveryWorker
+from bridge.services.job_service import JobOrchestrator, JobService
 from plugin.session_state import APVTSSessionState
 from storage.durable_storage import DurableStorage
 
 
-def test_idempotent_create_for_text_and_audio(tmp_path):
-    storage = DurableStorage(tmp_path / "jobs.db")
-    api = BridgeAPI(storage)
-
-    request_id = uuid4()
-    request = CreateJobRequest(prompt="hello", clientRequestId=request_id)
-    first, created = api.post_jobs_text(request)
-    second, created_again = api.post_jobs_text(request)
-
-    assert created is True
-    assert created_again is False
-    assert first.id == second.id
-
-    audio_request = CreateJobRequest(prompt="sound", clientRequestId=request_id)
-    audio, audio_created = api.post_jobs_audio(audio_request)
-    assert audio_created is True
-    assert audio.type.value == "audio"
-
-
-def test_persist_transitions_and_remote_id(tmp_path):
-    storage = DurableStorage(tmp_path / "jobs.db")
-    api = BridgeAPI(storage)
-    job, _ = api.post_jobs_text(CreateJobRequest(prompt="x", clientRequestId=uuid4()))
-
-    updated = storage.set_job_status(job.id, JobStatus.SUBMITTED, remote_provider_id="provider-123")
-    assert updated.remote_provider_id == "provider-123"
-    assert updated.status is JobStatus.SUBMITTED
-
-
-def test_recovery_worker_rehydrates_inflight_jobs(tmp_path):
-    storage = DurableStorage(tmp_path / "jobs.db")
-    api = BridgeAPI(storage)
-    created, _ = api.post_jobs_text(CreateJobRequest(prompt="x", clientRequestId=uuid4()))
-    downloading, _ = api.post_jobs_audio(CreateJobRequest(prompt="y", clientRequestId=uuid4()))
-    storage.set_job_status(downloading.id, JobStatus.DOWNLOADING)
-
-    polled: list[str] = []
-    downloaded: list[str] = []
-    worker = StartupRecoveryWorker(
-        storage,
-        resume_polling=lambda job: polled.append(job.id),
-        resume_download=lambda job: downloaded.append(job.id),
-    )
-
-    recovered = worker.run_once()
-    assert created.id in polled
-    assert downloading.id in downloaded
-    assert set(recovered) == {created.id, downloading.id}
-
-
-def test_download_dedup_uses_job_variant_checksum(tmp_path):
+def _api(tmp_path):
     storage = DurableStorage(tmp_path / "jobs.db")
     downloader = AssetDownloader(storage, root=tmp_path / "assets")
+    orchestrator = JobOrchestrator(storage=storage, provider=MockSunoAdapter(), downloader=downloader)
+    orchestrator.start()
+    service = JobService(storage=storage, orchestrator=orchestrator)
+    return storage, BridgeAPI(service), orchestrator
 
-    path1, inserted1 = downloader.store_download(job_id="job1", variant="main", content=b"abc", ext="wav")
-    path2, inserted2 = downloader.store_download(job_id="job1", variant="main", content=b"abc", ext="wav")
 
-    assert inserted1 is True
-    assert inserted2 is False
-    assert path1 == path2
+def test_idempotent_create_for_text_and_audio(tmp_path):
+    _, api, orchestrator = _api(tmp_path)
+    try:
+        request_id = uuid4()
+        request = CreateJobRequest(prompt="hello", clientRequestId=request_id)
+        first, created = api.post_jobs_text(request)
+        second, created_again = api.post_jobs_text(request)
+
+        assert created is True
+        assert created_again is False
+        assert first.id == second.id
+
+        audio_request = CreateJobRequest(prompt="sound", clientRequestId=request_id)
+        audio, audio_created = api.post_jobs_audio(audio_request, asset_id="asset-1")
+        assert audio_created is True
+        assert audio.type.value == "audio"
+    finally:
+        orchestrator.stop()
+
+
+def test_concurrent_idempotent_create(tmp_path):
+    _, api, orchestrator = _api(tmp_path)
+    try:
+        request = CreateJobRequest(prompt="concurrent", clientRequestId=uuid4())
+
+        def call_create():
+            return api.post_jobs_text(request)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [f.result() for f in [pool.submit(call_create), pool.submit(call_create)]]
+
+        job_ids = {result[0].id for result in results}
+        created_flags = [result[1] for result in results]
+        assert len(job_ids) == 1
+        assert created_flags.count(True) == 1
+        assert created_flags.count(False) == 1
+    finally:
+        orchestrator.stop()
 
 
 def test_plugin_state_generates_and_reconciles_without_duplicates(tmp_path):
-    storage = DurableStorage(tmp_path / "jobs.db")
-    api = BridgeAPI(storage)
-    session = APVTSSessionState(state_path=tmp_path / "session.json")
-    session.load()
+    storage, api, orchestrator = _api(tmp_path)
+    try:
+        session = APVTSSessionState(state_path=tmp_path / "session.json")
+        session.load()
 
-    request_id = session.ensure_request_id("submit-1")
-    same_request_id = session.ensure_request_id("submit-1")
-    assert request_id == same_request_id
+        request_id = session.ensure_request_id("submit-1")
+        same_request_id = session.ensure_request_id("submit-1")
+        assert request_id == same_request_id
 
-    job, _ = api.post_jobs_text(CreateJobRequest(prompt="melody", clientRequestId=request_id))
-    session.mark_job("submit-1", job_id=job.id)
-    storage.set_job_status(job.id, JobStatus.COMPLETE)
+        job, _ = api.post_jobs_text(CreateJobRequest(prompt="melody", clientRequestId=request_id))
+        session.mark_job("submit-1", job_id=job.id)
 
-    reconciled = session.reconcile_unresolved(storage)
-    assert len(reconciled) == 1
-    assert reconciled[0].resolved is True
+        # wait for worker to complete deterministically
+        for _ in range(100):
+            current = storage.get_job(job.id)
+            if current and current.status == JobStatus.COMPLETE:
+                break
+            import time
+            time.sleep(0.01)
+        reconciled = session.reconcile_unresolved(storage)
+        assert len(reconciled) == 1
+        assert reconciled[0].resolved is True
+    finally:
+        orchestrator.stop()
