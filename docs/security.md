@@ -1,31 +1,26 @@
-# Bridge Security Model (Current Phase)
+# Security model (current phase)
 
-## Baseline assumptions
+## Implemented
 
-- Bridge listens on loopback only.
-- Plugin/standalone client is same-user local process.
-- Shared secret is required for HMAC request signing.
+- Loopback bridge runtime.
+- Required protocol/request headers.
+- HMAC signed request envelope with replay/expiry checks.
+- Local discovery/dev configuration model.
 
-## Implemented plugin↔bridge controls
+## Compliance-first provider boundary
 
-1. Required protocol/request headers:
-   - `X-Plugin-Version`, `X-Protocol-Version`, `X-Request-ID`
-2. HMAC request envelope:
-   - `X-Signature-Timestamp`, `X-Signature-Nonce`, `X-Body-Sha256`, `X-Signature`
-3. Replay/expiry checks enforced by bridge signer logic.
-4. Discovery lockfile path and protocol/auth metadata for runtime endpoint discovery.
+For Suno integration in this phase, the project supports only **manual user actions** in official Suno UI.
 
-## Current-phase practical bootstrap
+Not implemented:
+- scraping/robots
+- browser automation
+- reverse engineered or unofficial API wrappers
+- session/cookie theft
 
-Two supported client modes:
+## User notices
 
-- **Discovery mode**: read lockfile host/port/protocol and use shared-secret override if needed.
-- **Dev mode**: explicit host/port/shared-secret config.
+Client UX should remind users:
+- they must have rights to uploaded source content,
+- Suno ownership/commercial terms depend on their Suno plan.
 
-If keychain retrieval is not wired on the JUCE side yet, manual secret override is allowed and must be documented.
-
-## Out of scope for this phase
-
-- Real provider auth/session automation.
-- Remote network trust models.
-- ARA-specific security hardening.
+This repo does not provide legal advice.

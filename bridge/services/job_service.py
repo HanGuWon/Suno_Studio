@@ -8,8 +8,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from bridge.adapters.base import ProviderAdapter
+from bridge.adapters.manual_suno import ManualSunoAdapter
 from bridge.downloader import AssetDownloader
-from bridge.models import CreateJobRequest, Job, JobStatus, JobType, TERMINAL_STATES
+from bridge.models import CreateJobRequest, Job, JobStatus, JobType, ProviderMode, TERMINAL_STATES
 from storage.durable_storage import DurableStorage
 
 
@@ -56,18 +57,29 @@ class JobOrchestrator:
     def __init__(
         self,
         storage: DurableStorage,
-        provider: ProviderAdapter,
         downloader: AssetDownloader,
         *,
+        providers: dict[ProviderMode, ProviderAdapter] | None = None,
+        provider: ProviderAdapter | None = None,
         retry_policy: RetryPolicy | None = None,
     ) -> None:
         self.storage = storage
-        self.provider = provider
+        if providers is None:
+            if provider is None:
+                raise ValueError("Either providers map or provider must be supplied")
+            providers = {ProviderMode.MOCK_SUNO: provider}
+        self.providers = providers
         self.downloader = downloader
         self.retry_policy = retry_policy or RetryPolicy()
         self.queue = JobQueue()
         self.cancellations = CancellationRegistry()
         self._worker = WorkerLoop(self)
+
+    def _provider_for(self, job: Job) -> ProviderAdapter:
+        provider = self.providers.get(job.provider_mode)
+        if provider is None:
+            raise ValueError(f"provider mode unsupported for runtime: {job.provider_mode.value}")
+        return provider
 
     def start(self) -> None:
         self._worker.start()
@@ -87,8 +99,9 @@ class JobOrchestrator:
     def recover_inflight_jobs(self) -> list[str]:
         recovered: list[str] = []
         for job in self.storage.list_in_flight_jobs():
-            self.queue.enqueue(job.id)
-            recovered.append(job.id)
+            if job.provider_mode is ProviderMode.MOCK_SUNO:
+                self.queue.enqueue(job.id)
+                recovered.append(job.id)
         return recovered
 
     def cancel_job(self, job_id: str) -> Job:
@@ -98,8 +111,9 @@ class JobOrchestrator:
         if job.status in TERMINAL_STATES:
             return job
         self.cancellations.request(job_id)
+        provider = self._provider_for(job)
         if job.remote_job_id:
-            self.provider.cancel_remote_job(job.remote_job_id)
+            provider.cancel_remote_job(job.remote_job_id)
             return self.storage.set_job_status(job_id, JobStatus.CANCELLING, reason="cancel requested")
         return self.storage.set_job_status(job_id, JobStatus.CANCELLED, reason="cancelled before remote submit")
 
@@ -113,15 +127,61 @@ class JobOrchestrator:
             self.cancellations.clear(job_id)
             return
 
+        provider = self._provider_for(job)
+        if job.provider_mode is ProviderMode.MANUAL_SUNO:
+            self._prepare_manual(job, provider)
+            return
+
         if not job.remote_job_id:
-            self._submit_remote(job)
+            self._submit_remote(job, provider)
             job = self.storage.get_job(job_id)
             if not job:
                 return
 
-        self._poll_and_download(job)
+        self._poll_and_download(job, provider)
 
-    def _submit_remote(self, job: Job) -> None:
+    def _prepare_manual(self, job: Job, provider: ProviderAdapter) -> None:
+        if not isinstance(provider, ManualSunoAdapter):
+            self.storage.set_job_status(job.id, JobStatus.FAILED, reason="manual provider not configured", last_error="manual provider not configured")
+            return
+        current = self.storage.get_job(job.id)
+        if not current or current.status in TERMINAL_STATES:
+            return
+        if current.status not in {JobStatus.QUEUED_LOCAL, JobStatus.CREATED, JobStatus.AWAITING_MANUAL_PROVIDER_SUBMISSION}:
+            return
+
+        self.storage.set_job_status(job.id, JobStatus.AWAITING_MANUAL_PROVIDER_SUBMISSION, progress=0.1)
+        metadata = dict(current.payload.get("metadata", {}))
+        metadata["provider_mode"] = current.provider_mode.value
+
+        source_path = None
+        if current.type is JobType.AUDIO:
+            asset_id = current.asset_id or current.payload.get("assetId")
+            if not asset_id:
+                self.storage.set_job_status(job.id, JobStatus.FAILED, reason="missing audio asset", last_error="missing audio asset")
+                return
+            manifest = self.storage.get_imported_asset(asset_id)
+            if not manifest:
+                self.storage.set_job_status(job.id, JobStatus.FAILED, reason="asset not found", last_error="asset not found")
+                return
+            source_path = Path(manifest["original"]["path"])
+            metadata["audio_prompt_asset_id"] = asset_id
+
+        if current.type is JobType.TEXT:
+            remote_id = provider.submit_text_job(job_id=job.id, prompt=current.payload.get("prompt", ""), metadata=metadata)
+        else:
+            remote_id = provider.submit_audio_job(
+                job_id=job.id,
+                prompt=current.payload.get("prompt", ""),
+                metadata=metadata,
+                source_path=source_path,
+            )
+
+        handoff = provider.get_handoff(job.id)
+        self.storage.update_job_provider_metadata(job.id, {"handoff": handoff})
+        self.storage.set_job_status(job.id, JobStatus.AWAITING_MANUAL_PROVIDER_RESULT, remote_job_id=remote_id, progress=0.2)
+
+    def _submit_remote(self, job: Job, provider: ProviderAdapter) -> None:
         current = self.storage.get_job(job.id)
         if not current or current.status in TERMINAL_STATES:
             return
@@ -139,7 +199,7 @@ class JobOrchestrator:
             return
 
         if job.type is JobType.TEXT:
-            remote_id = self.provider.submit_text_job(
+            remote_id = provider.submit_text_job(
                 job_id=job.id,
                 prompt=job.payload.get("prompt", ""),
                 metadata=job.payload.get("metadata", {}),
@@ -153,7 +213,7 @@ class JobOrchestrator:
             if not manifest:
                 self.storage.set_job_status(job.id, JobStatus.FAILED, reason="asset not found", last_error="asset not found")
                 return
-            remote_id = self.provider.submit_audio_job(
+            remote_id = provider.submit_audio_job(
                 job_id=job.id,
                 prompt=job.payload.get("prompt", ""),
                 metadata=job.payload.get("metadata", {}),
@@ -162,7 +222,7 @@ class JobOrchestrator:
 
         self.storage.set_job_status(job.id, JobStatus.POLLING_REMOTE, remote_job_id=remote_id, progress=0.1)
 
-    def _poll_and_download(self, job: Job) -> None:
+    def _poll_and_download(self, job: Job, provider: ProviderAdapter) -> None:
         current = self.storage.get_job(job.id)
         if not current or current.status in TERMINAL_STATES or not current.remote_job_id:
             return
@@ -170,16 +230,14 @@ class JobOrchestrator:
         attempts = current.attempts
         while attempts < self.retry_policy.max_attempts:
             if self.cancellations.is_cancelled(job.id):
-                self.provider.cancel_remote_job(current.remote_job_id)
+                provider.cancel_remote_job(current.remote_job_id)
                 self.storage.set_job_status(job.id, JobStatus.CANCELLED, reason="cancelled during polling", progress=current.progress)
                 self.cancellations.clear(job.id)
                 return
 
-            poll = self.provider.poll_job(current.remote_job_id)
+            poll = provider.poll_job(current.remote_job_id)
             if poll.state == "retryable_error":
                 attempts += 1
-                self.storage.update_job_runtime_fields(job.id, progress=poll.progress, last_error=poll.retryable_error)
-                self.storage.update_job_runtime_fields(job.id, progress=poll.progress)
                 self.storage.set_job_status(
                     job.id,
                     JobStatus.POLLING_REMOTE,
@@ -208,7 +266,7 @@ class JobOrchestrator:
                 return
 
             self.storage.set_job_status(job.id, JobStatus.DOWNLOADING, progress=0.95)
-            outputs = self.provider.download_outputs(current.remote_job_id)
+            outputs = provider.download_outputs(current.remote_job_id)
             files: list[dict[str, str]] = []
             output_assets: list[str] = []
             for output in outputs:
@@ -255,7 +313,6 @@ class WorkerLoop:
             try:
                 self.orchestrator.process_one(job_id)
             except Exception:
-                # Worker should stay alive; per-job errors are persisted by orchestrator paths.
                 continue
 
 
@@ -264,13 +321,26 @@ class JobService:
         self.storage = storage
         self.orchestrator = orchestrator
 
-    def create_text_job(self, request: CreateJobRequest) -> tuple[Job, bool]:
-        return self._create_job(job_type=JobType.TEXT, request=request, asset_id=None)
+    def create_text_job(self, request: CreateJobRequest, *, provider_mode: ProviderMode = ProviderMode.MOCK_SUNO) -> tuple[Job, bool]:
+        return self._create_job(job_type=JobType.TEXT, request=request, asset_id=None, provider_mode=provider_mode)
 
-    def create_audio_job(self, request: CreateJobRequest, *, asset_id: str | None = None) -> tuple[Job, bool]:
-        return self._create_job(job_type=JobType.AUDIO, request=request, asset_id=asset_id)
+    def create_audio_job(
+        self,
+        request: CreateJobRequest,
+        *,
+        asset_id: str | None = None,
+        provider_mode: ProviderMode = ProviderMode.MOCK_SUNO,
+    ) -> tuple[Job, bool]:
+        return self._create_job(job_type=JobType.AUDIO, request=request, asset_id=asset_id, provider_mode=provider_mode)
 
-    def _create_job(self, *, job_type: JobType, request: CreateJobRequest, asset_id: str | None) -> tuple[Job, bool]:
+    def _create_job(
+        self,
+        *,
+        job_type: JobType,
+        request: CreateJobRequest,
+        asset_id: str | None,
+        provider_mode: ProviderMode,
+    ) -> tuple[Job, bool]:
         payload = {"prompt": request.prompt, "metadata": request.metadata}
         if asset_id:
             payload["assetId"] = asset_id
@@ -282,6 +352,7 @@ class JobService:
             client_request_id=request.clientRequestId,
             payload=payload,
             asset_id=asset_id,
+            provider_mode=provider_mode,
         )
         persisted, created = self.storage.create_job_idempotent(job)
         if created:

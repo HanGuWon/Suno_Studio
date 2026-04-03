@@ -8,15 +8,40 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
 
-from bridge.models import IN_FLIGHT_STATES, Job, JobStatus, JobTransition, JobType
+from bridge.models import IN_FLIGHT_STATES, Job, JobStatus, JobTransition, JobType, ProviderMode
 
 
 _ALLOWED_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
-    JobStatus.CREATED: {JobStatus.QUEUED_LOCAL, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
-    JobStatus.QUEUED_LOCAL: {JobStatus.SUBMITTING_REMOTE, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.CREATED: {
+        JobStatus.QUEUED_LOCAL,
+        JobStatus.AWAITING_MANUAL_PROVIDER_SUBMISSION,
+        JobStatus.CANCELLING,
+        JobStatus.CANCELLED,
+        JobStatus.FAILED,
+    },
+    JobStatus.QUEUED_LOCAL: {
+        JobStatus.SUBMITTING_REMOTE,
+        JobStatus.AWAITING_MANUAL_PROVIDER_SUBMISSION,
+        JobStatus.CANCELLING,
+        JobStatus.CANCELLED,
+        JobStatus.FAILED,
+    },
     JobStatus.SUBMITTING_REMOTE: {JobStatus.POLLING_REMOTE, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
     JobStatus.POLLING_REMOTE: {JobStatus.DOWNLOADING, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
     JobStatus.DOWNLOADING: {JobStatus.COMPLETE, JobStatus.CANCELLING, JobStatus.CANCELLED, JobStatus.FAILED},
+    JobStatus.AWAITING_MANUAL_PROVIDER_SUBMISSION: {
+        JobStatus.AWAITING_MANUAL_PROVIDER_RESULT,
+        JobStatus.CANCELLING,
+        JobStatus.CANCELLED,
+        JobStatus.FAILED,
+    },
+    JobStatus.AWAITING_MANUAL_PROVIDER_RESULT: {
+        JobStatus.IMPORTING_PROVIDER_RESULT,
+        JobStatus.CANCELLING,
+        JobStatus.CANCELLED,
+        JobStatus.FAILED,
+    },
+    JobStatus.IMPORTING_PROVIDER_RESULT: {JobStatus.COMPLETE, JobStatus.FAILED, JobStatus.CANCELLED},
     JobStatus.CANCELLING: {JobStatus.CANCELLED, JobStatus.FAILED},
     JobStatus.COMPLETE: set(),
     JobStatus.CANCELLED: set(),
@@ -52,6 +77,8 @@ class DurableStorage:
                     status TEXT NOT NULL,
                     client_request_id TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
+                    provider_mode TEXT NOT NULL DEFAULT 'mock_suno',
+                    provider_metadata_json TEXT,
                     remote_provider_id TEXT,
                     asset_id TEXT,
                     output_manifest_json TEXT,
@@ -107,6 +134,10 @@ class DurableStorage:
             conn.execute("ALTER TABLE jobs ADD COLUMN last_error TEXT")
         if "attempts" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        if "provider_mode" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN provider_mode TEXT NOT NULL DEFAULT 'mock_suno'")
+        if "provider_metadata_json" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN provider_metadata_json TEXT")
 
     def create_job_idempotent(self, job: Job) -> tuple[Job, bool]:
         with self._conn() as conn:
@@ -114,10 +145,10 @@ class DurableStorage:
                 conn.execute(
                     """
                     INSERT INTO jobs (
-                        id, type, status, client_request_id, payload_json, remote_provider_id,
+                        id, type, status, client_request_id, payload_json, provider_mode, provider_metadata_json, remote_provider_id,
                         asset_id, output_manifest_json, output_assets_json, progress,
                         last_error, attempts, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job.id,
@@ -125,6 +156,8 @@ class DurableStorage:
                         job.status.value,
                         str(job.client_request_id),
                         json.dumps(job.payload),
+                        job.provider_mode.value,
+                        json.dumps(job.provider_metadata),
                         job.remote_job_id,
                         job.asset_id,
                         json.dumps(job.output_manifest_json) if job.output_manifest_json else None,
@@ -254,6 +287,27 @@ class DurableStorage:
                 ),
             )
             refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return _row_to_job(refreshed)
+
+    def update_job_provider_metadata(self, job_id: str, provider_metadata: dict[str, Any]) -> Job:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown job_id={job_id}")
+            conn.execute(
+                """
+                UPDATE jobs
+                SET provider_metadata_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(provider_metadata),
+                    datetime.now(timezone.utc).isoformat(),
+                    job_id,
+                ),
+            )
+            refreshed = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return _row_to_job(refreshed)
 
     def attach_job_artifacts(
@@ -336,6 +390,8 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         status=JobStatus(row["status"]),
         client_request_id=UUID(row["client_request_id"]),
         payload=json.loads(row["payload_json"]),
+        provider_mode=ProviderMode(row["provider_mode"] or ProviderMode.MOCK_SUNO.value),
+        provider_metadata=json.loads(row["provider_metadata_json"]) if row["provider_metadata_json"] else {},
         remote_job_id=row["remote_provider_id"],
         asset_id=row["asset_id"],
         output_manifest_json=json.loads(row["output_manifest_json"]) if row["output_manifest_json"] else None,

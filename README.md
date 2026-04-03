@@ -1,84 +1,69 @@
-# Suno Studio — Async Bridge + JUCE Client Convergence
+# Suno Studio — Async Bridge with Mock + Manual Suno Provider Modes
 
-This repo currently provides:
+This repo provides:
 
-1. Async Python bridge runtime (mock-provider backed).
-2. JUCE plugin + standalone client shell wired to the bridge contract.
+1. Async Python bridge runtime (source of truth).
+2. Mock provider automation path for deterministic tests/dev.
+3. Compliance-first **manual_suno** path for real human-in-the-loop Suno workflows.
+4. JUCE plugin + standalone shell for submit/poll/import/preview/reveal/drag handoff.
 
-## Bridge source of truth
+## Provider modes
 
-Current client implementation targets these bridge endpoints and payload types:
+- `mock_suno` (default): bridge worker submits/polls/downloads automatically.
+- `manual_suno`: bridge prepares a handoff package and waits for user completion.
+- placeholders only: `official_api`, `web_session`.
 
-- `GET /capabilities` (handshake)
+Each job persists its `providerMode` and provider metadata.
+
+## Manual Suno workflow (no automation)
+
+1. Submit text or audio job with `providerMode=manual_suno`.
+2. Bridge prepares `storage/provider_workspaces/<job_id>/` with:
+   - `handoff.json`
+   - `prompt.txt`
+   - `metadata.json`
+   - `source_audio/` (for audio prompt jobs)
+   - `README.md` instructions
+3. User performs the job manually in Suno UI.
+4. User imports downloaded outputs via `POST /jobs/{job_id}/manual-complete`.
+5. Bridge attaches imported outputs, normalizes manifest, and marks job complete.
+
+## Bridge endpoints used now
+
+- `GET /capabilities`
 - `POST /jobs/text` (JSON)
-- `POST /assets/import` (multipart/form-data)
-- `POST /jobs/audio` (multipart/form-data)
+- `POST /assets/import` (multipart)
+- `POST /jobs/audio` (multipart)
 - `GET /jobs/{job_id}`
 - `POST /jobs/{job_id}/cancel`
+- `GET /jobs/{job_id}/handoff`
+- `POST /jobs/{job_id}/manual-complete`
 
-Plugin/standalone requests include protocol headers and HMAC envelope headers expected by the bridge.
+## Compliance boundary
 
-## What the client can do now
-
-- Connect to bridge (discovery mode or dev mode).
-- Submit text jobs.
-- Import local audio file and submit audio job.
-- Poll async job status.
-- Display output files.
-- Preview output audio.
-- Reveal output in file browser.
-- Drag/copy output path for DAW handoff.
-
-## REAPER PoC
-
-Manual assisted scripts are provided under `host_adapters/reaper/`:
-- insert generated file at cursor
-- prepare export range from time selection/selected item
-
-This is **not** universal auto-insert.
-
-## Not implemented in this phase
-
-- Real Suno browser/session automation
-- Universal DAW timeline auto-insert
-- Full ARA runtime
+This repository does **not** implement scraping, browser automation, reverse engineering, session theft, or unofficial Suno APIs.
 
 ## Build/setup
-
-### Python bridge
 
 ```bash
 python -m pip install -e .
 python -m bridge.main
 ```
 
-### JUCE client
-
-JUCE is not vendored; provide it externally.
+JUCE (external):
 
 ```bash
 cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
 cmake --build build/plugin_juce
 ```
 
-## Tests run
+## Tests
 
 ```bash
 npm test
 pytest -q
 ```
 
-## Important build reality
+## Environment note
 
-- In this environment, JUCE binaries were **not** compiled.
-- Bridge/client contract tests and runtime tests were run.
-
-## Docs
-
-- `docs/plugin_client_architecture.md`
-- `docs/user_workflows.md`
-- `docs/reaper_adapter.md`
-- `docs/ara_plan.md`
-- `docs/security.md`
-- `docs/provider_contract.md`
-- `docs/ipc_contract.md`
+JUCE binaries were not built in this environment.

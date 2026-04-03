@@ -1,62 +1,41 @@
-# Provider Contract (Bridge Runtime Baseline)
+# Provider Contract
 
-This document defines the current bridge contract used by plugin/standalone clients in this repository.
+## Modes
 
-## Transport and discovery
+- `mock_suno` (default): async remote-like lifecycle.
+- `manual_suno`: prepares a manual handoff package, then waits for explicit manual completion intake.
+- `official_api`, `web_session`: placeholders only.
 
-- Transport: HTTP loopback only (`http://127.0.0.1:<port>`).
-- Discovery order:
-  1. explicit dev config (host/port/secret)
-  2. bridge lockfile discovery
-  3. default dev fallback (`127.0.0.1:7071`)
+Provider mode is persisted per job.
 
-## Auth model (current baseline)
+## Manual provider states
 
-Plugin/standalone clients sign requests with HMAC-SHA256 headers:
+- `awaiting_manual_provider_submission`
+- `awaiting_manual_provider_result`
+- `importing_provider_result`
 
-- `X-Signature-Timestamp`
-- `X-Signature-Nonce`
-- `X-Body-Sha256`
-- `X-Signature`
+## Endpoints
 
-Signature formula:
+- `POST /jobs/text` with optional `providerMode`.
+- `POST /jobs/audio` with optional `providerMode` form field.
+- `GET /jobs/{job_id}/handoff` for manual jobs.
+- `POST /jobs/{job_id}/manual-complete` for manual jobs.
 
-`signature = HMAC_SHA256(shared_secret, "{timestamp}.{nonce}.{body_sha256}")`
+## Manual handoff package
 
-No bearer-token baseline is used for plugin↔bridge in this phase.
+`storage/provider_workspaces/<job_id>/`
 
-## Required headers
+- `handoff.json` (requested deliverables + mode/options)
+- `prompt.txt`
+- `metadata.json`
+- `source_audio/` (optional)
+- `README.md` (exact user instructions)
 
-All requests include:
+## Manual completion manifest
 
-- `X-Plugin-Version`
-- `X-Protocol-Version`
-- `X-Request-ID`
+Bridge records:
+- requested deliverables
+- imported deliverables grouped by family (`mix`, `stems`, `tempoLockedStems`, `midi`)
+- concrete imported file paths
 
-## Handshake
-
-Clients call `GET /capabilities` before first job submission and enforce protocol range checks.
-
-## Endpoint contract used by client layer
-
-- `GET /capabilities`
-- `POST /jobs/text` (JSON)
-- `POST /assets/import` (multipart/form-data)
-- `POST /jobs/audio` (multipart/form-data)
-- `GET /jobs/{job_id}`
-- `POST /jobs/{job_id}/cancel`
-
-## Canonical error payload
-
-```json
-{
-  "error": {
-    "code": "PROTOCOL_VERSION_UNSUPPORTED",
-    "message": "...",
-    "details": {},
-    "request_id": "..."
-  }
-}
-```
-
-Clients should branch on `error.code`, not free-form message text.
+No assumption is made that all requested outputs are returned.

@@ -206,3 +206,85 @@ def test_hmac_signed_requests_and_protocol_mismatch(tmp_path: Path):
         }
         ok = client.post("/jobs/text", data=raw, headers=headers)
         assert ok.status_code == 200
+
+
+def test_manual_provider_handoff_for_text_job(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/text",
+            json={
+                "clientRequestId": str(uuid4()),
+                "prompt": "manual handoff text",
+                "providerMode": "manual_suno",
+                "metadata": {"mode": "song", "request_stems": True, "request_midi": True},
+            },
+            headers=_headers("m1"),
+        )
+        assert create.status_code == 200
+        job = create.json()["job"]
+        assert job["providerMode"] == "manual_suno"
+
+        for _ in range(20):
+            refreshed = client.get(f"/jobs/{job['id']}", headers=_headers(str(uuid4()))).json()
+            if refreshed["status"] == "awaiting_manual_provider_result":
+                break
+            time.sleep(0.02)
+        assert refreshed["status"] == "awaiting_manual_provider_result"
+
+        handoff = client.get(f"/jobs/{job['id']}/handoff", headers=_headers("m2"))
+        assert handoff.status_code == 200
+        payload = handoff.json()
+        assert payload["handoff"]["requested_deliverables"]["stems"] is True
+        assert Path(payload["workspace"]).exists()
+
+
+def test_manual_provider_audio_job_and_manual_complete(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/audio",
+            headers=_headers("ma1"),
+            data={
+                "clientRequestId": str(uuid4()),
+                "prompt": "manual audio",
+                "metadata": json.dumps({"mode": "audio_prompt", "request_mix": True, "request_midi": True}),
+                "providerMode": "manual_suno",
+            },
+            files={"file": ("seed.wav", _wav_bytes(), "audio/wav")},
+        )
+        assert create.status_code == 200
+        job_id = create.json()["job"]["id"]
+        for _ in range(20):
+            refreshed = client.get(f"/jobs/{job_id}", headers=_headers(str(uuid4()))).json()
+            if refreshed["status"] == "awaiting_manual_provider_result":
+                break
+            time.sleep(0.02)
+        assert refreshed["status"] == "awaiting_manual_provider_result"
+
+        complete = client.post(
+            f"/jobs/{job_id}/manual-complete",
+            headers=_headers("ma2"),
+            files={
+                "mixFiles": ("result.wav", _wav_bytes(), "audio/wav"),
+                "midiFiles": ("result.mid", b"MThd....", "audio/midi"),
+            },
+        )
+        assert complete.status_code == 200
+        body = complete.json()
+        assert body["status"] == "complete"
+        assert body["outputManifest"]["importedDeliverables"]["mix"]
+        assert body["outputManifest"]["importedDeliverables"]["midi"]
+
+
+def test_mock_provider_regression_still_completes(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "mock still works", "providerMode": "mock_suno", "metadata": {}},
+            headers=_headers("rg1"),
+        )
+        assert create.status_code == 200
+        terminal = _wait_for_terminal(client, create.json()["job"]["id"])
+        assert terminal["status"] == "complete"

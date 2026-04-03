@@ -18,6 +18,9 @@ class JobStatus(str, Enum):
     SUBMITTING_REMOTE = "submitting_remote"
     POLLING_REMOTE = "polling_remote"
     DOWNLOADING = "downloading"
+    AWAITING_MANUAL_PROVIDER_SUBMISSION = "awaiting_manual_provider_submission"
+    AWAITING_MANUAL_PROVIDER_RESULT = "awaiting_manual_provider_result"
+    IMPORTING_PROVIDER_RESULT = "importing_provider_result"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLING = "cancelling"
@@ -31,8 +34,18 @@ IN_FLIGHT_STATES = {
     JobStatus.SUBMITTING_REMOTE,
     JobStatus.POLLING_REMOTE,
     JobStatus.DOWNLOADING,
+    JobStatus.AWAITING_MANUAL_PROVIDER_SUBMISSION,
+    JobStatus.AWAITING_MANUAL_PROVIDER_RESULT,
+    JobStatus.IMPORTING_PROVIDER_RESULT,
     JobStatus.CANCELLING,
 }
+
+
+class ProviderMode(str, Enum):
+    MOCK_SUNO = "mock_suno"
+    MANUAL_SUNO = "manual_suno"
+    OFFICIAL_API = "official_api"
+    WEB_SESSION = "web_session"
 
 
 @dataclass(slots=True)
@@ -49,6 +62,8 @@ class Job:
     status: JobStatus
     client_request_id: UUID
     payload: dict[str, Any]
+    provider_mode: ProviderMode = ProviderMode.MOCK_SUNO
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
     remote_job_id: str | None = None
     asset_id: str | None = None
     output_manifest_json: dict[str, Any] | None = None

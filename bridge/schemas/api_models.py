@@ -11,6 +11,7 @@ class TextJobCreateRequest(BaseModel):
     clientRequestId: UUID
     prompt: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    providerMode: str = "mock_suno"
 
 
 class JobStatusResponse(BaseModel):
@@ -24,6 +25,8 @@ class JobStatusResponse(BaseModel):
     lastError: str | None
     outputAssets: list[str] = Field(default_factory=list)
     outputManifest: dict[str, Any] | None
+    providerMode: str
+    providerMetadata: dict[str, Any] = Field(default_factory=dict)
     createdAt: datetime
     updatedAt: datetime
 
@@ -40,6 +43,14 @@ class AssetImportResponse(BaseModel):
 
 class CancelJobResponse(BaseModel):
     job: JobStatusResponse
+
+
+class ManualHandoffResponse(BaseModel):
+    jobId: str
+    providerMode: str
+    workspace: str
+    instructionsPath: str
+    handoff: dict[str, Any]
 
 
 class ErrorPayloadDetail(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import time
 import uuid
 import urllib.error
@@ -93,9 +94,18 @@ class BridgeClient:
         if not self._handshake_done:
             self.preflight_handshake(str(uuid.uuid4()))
 
-    def create_text_job(self, *, client_request_id: str, prompt: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    def create_text_job(
+        self,
+        *,
+        client_request_id: str,
+        prompt: str,
+        metadata: dict[str, Any] | None = None,
+        provider_mode: str = "mock_suno",
+    ) -> dict[str, Any]:
         self._ensure_handshake()
-        body = json.dumps({"clientRequestId": client_request_id, "prompt": prompt, "metadata": metadata or {}}).encode("utf-8")
+        body = json.dumps(
+            {"clientRequestId": client_request_id, "prompt": prompt, "metadata": metadata or {}, "providerMode": provider_mode}
+        ).encode("utf-8")
         req = urllib.request.Request(
             f"{self._config.base_url}/jobs/text",
             method="POST",
@@ -112,6 +122,7 @@ class BridgeClient:
         metadata: dict[str, Any] | None = None,
         asset_id: str | None = None,
         file_path: str | None = None,
+        provider_mode: str = "mock_suno",
     ) -> dict[str, Any]:
         self._ensure_handshake()
         if not asset_id and not file_path:
@@ -124,6 +135,7 @@ class BridgeClient:
             metadata=metadata or {},
             asset_id=asset_id,
             file_path=file_path,
+            provider_mode=provider_mode,
         )
         headers = self._headers(str(uuid.uuid4()), body, include_json=False)
         headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
@@ -171,6 +183,45 @@ class BridgeClient:
         )
         return self._urlopen_json(req)
 
+    def get_handoff(self, job_id: str) -> dict[str, Any]:
+        self._ensure_handshake()
+        req = urllib.request.Request(
+            f"{self._config.base_url}/jobs/{urllib.parse.quote(job_id)}/handoff",
+            method="GET",
+            headers=self._headers(str(uuid.uuid4()), include_json=False),
+        )
+        return self._urlopen_json(req)
+
+    def manual_complete(
+        self,
+        job_id: str,
+        *,
+        mix_files: list[str] | None = None,
+        stem_files: list[str] | None = None,
+        tempo_locked_stem_files: list[str] | None = None,
+        midi_files: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_handshake()
+        boundary = f"----BridgeBoundary{uuid.uuid4().hex}"
+        body = self._build_manual_complete_multipart(
+            boundary=boundary,
+            files_by_field={
+                "mixFiles": mix_files or [],
+                "stemFiles": stem_files or [],
+                "tempoLockedStemFiles": tempo_locked_stem_files or [],
+                "midiFiles": midi_files or [],
+            },
+        )
+        headers = self._headers(str(uuid.uuid4()), body, include_json=False)
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        req = urllib.request.Request(
+            f"{self._config.base_url}/jobs/{urllib.parse.quote(job_id)}/manual-complete",
+            method="POST",
+            headers=headers,
+            data=body,
+        )
+        return self._urlopen_json(req)
+
     def wait_for_job(self, job_id: str, *, timeout_seconds: float = 10.0, poll_interval_seconds: float = 0.05) -> dict[str, Any]:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
@@ -190,6 +241,7 @@ class BridgeClient:
         metadata: dict[str, Any],
         asset_id: str | None,
         file_path: str | None,
+        provider_mode: str,
     ) -> bytes:
         chunks: list[bytes] = []
 
@@ -206,6 +258,7 @@ class BridgeClient:
         add_field("clientRequestId", client_request_id)
         add_field("prompt", prompt)
         add_field("metadata", json.dumps(metadata))
+        add_field("providerMode", provider_mode)
         if asset_id:
             add_field("assetId", asset_id)
         if file_path:
@@ -242,3 +295,21 @@ class BridgeClient:
             except json.JSONDecodeError:
                 pass
             raise RuntimeError(f"Bridge HTTP {exc.code}: {detail}") from exc
+
+    def _build_manual_complete_multipart(self, *, boundary: str, files_by_field: dict[str, list[str]]) -> bytes:
+        chunks: list[bytes] = []
+        for field, files in files_by_field.items():
+            for file_path in files:
+                path = Path(file_path)
+                mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                chunks.extend(
+                    [
+                        f"--{boundary}\r\n".encode(),
+                        f'Content-Disposition: form-data; name="{field}"; filename="{path.name}"\r\n'.encode(),
+                        f"Content-Type: {mime_type}\r\n\r\n".encode(),
+                        path.read_bytes(),
+                        b"\r\n",
+                    ]
+                )
+        chunks.append(f"--{boundary}--\r\n".encode())
+        return b"".join(chunks)

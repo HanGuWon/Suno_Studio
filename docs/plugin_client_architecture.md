@@ -1,37 +1,20 @@
-# Plugin client architecture (client-convergence phase)
+# Plugin client architecture
 
-## Implemented in this phase
+## Current layering
 
-- Shared C++ `BridgeController` used by both plugin editor and standalone app.
-- Shared `BridgeHttpClient` with handshake, HMAC headers, JSON + multipart endpoint handling.
-- Shared `PluginStateStore` persistence for recent jobs/assets and last output context.
-- Generic drag/reveal/preview output workflow.
-- REAPER-assisted manual adapter path documented separately.
+1. `BridgeController`: connect, submit, poll, cancel, output state.
+2. `BridgeHttpClient`: protocol headers + HMAC + JSON/multipart calls.
+3. `PluginStateStore`: persisted context.
+4. Plugin and standalone surfaces.
 
-## Layering
+## Provider-mode behavior
 
-1. **Controller layer** (`BridgeController`)
-   - connect/disconnect
-   - submit text/audio
-   - poll/cancel
-   - output selection
-   - persistence updates
-2. **Transport layer** (`BridgeHttpClient`)
-   - discovery/dev endpoint targeting
-   - header/signing envelope
-   - endpoint calls and canonical error parsing
-3. **State layer** (`PluginStateStore`)
-   - persisted UX/session continuity
-4. **UI surfaces**
-   - plugin editor
-   - standalone app
+Client requests can select `providerMode` (`mock_suno` or `manual_suno`).
 
-## Auth/signing status
+For `manual_suno` jobs, the bridge lifecycle is explicit waiting + manual completion intake rather than remote polling automation.
 
-The client emits the same signature header shape as Python bridge runtime and follows the same payload pattern for request signing.
+## Honest scope
 
-## Honest limitations
-
-- Full production keychain bootstrap on JUCE side is not complete yet.
-- Manual shared-secret override is still supported for practical local development.
-- ARA runtime remains future work.
+- No Suno automation/scraping logic.
+- No universal DAW auto-insert.
+- No ARA runtime in this phase.
