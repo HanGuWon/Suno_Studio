@@ -26,11 +26,12 @@ juce::MemoryBlock sha256Raw(const void* data, size_t size)
 juce::String hmacSha256Hex(const juce::String& key, const juce::String& message)
 {
     constexpr size_t blockSize = 64;
-
     juce::MemoryBlock keyBlock;
     keyBlock.append(key.toRawUTF8(), static_cast<size_t>(key.getNumBytesAsUTF8()));
+
     if (keyBlock.getSize() > blockSize)
         keyBlock = sha256Raw(keyBlock.getData(), keyBlock.getSize());
+
     if (keyBlock.getSize() < blockSize)
         keyBlock.append(juce::String::repeatedString("\0", static_cast<int>(blockSize - keyBlock.getSize())).toRawUTF8(),
                         blockSize - keyBlock.getSize());
@@ -64,6 +65,25 @@ juce::String quote(const juce::String& value)
     return "\"" + value.replace("\"", "\\\"") + "\"";
 }
 
+void appendString(juce::MemoryBlock& body, const juce::String& s)
+{
+    body.append(s.toRawUTF8(), static_cast<size_t>(s.getNumBytesAsUTF8()));
+}
+
+void appendFilePart(juce::MemoryBlock& body,
+                    const juce::String& boundary,
+                    const juce::String& field,
+                    const juce::File& file,
+                    const juce::String& mimeType)
+{
+    auto data = file.loadFileAsData();
+    appendString(body, "--" + boundary + "\r\n");
+    appendString(body, "Content-Disposition: form-data; name=" + quote(field) + "; filename=" + quote(file.getFileName()) + "\r\n");
+    appendString(body, "Content-Type: " + mimeType + "\r\n\r\n");
+    body.append(data.getData(), data.getSize());
+    appendString(body, "\r\n");
+}
+
 juce::MemoryBlock buildMultipartBody(const juce::String& boundary,
                                      const juce::StringPairArray& fields,
                                      const juce::String& fileField,
@@ -71,28 +91,17 @@ juce::MemoryBlock buildMultipartBody(const juce::String& boundary,
                                      const juce::String& mimeType)
 {
     juce::MemoryBlock body;
-    auto appendString = [&body](const juce::String& s)
-    {
-        body.append(s.toRawUTF8(), static_cast<size_t>(s.getNumBytesAsUTF8()));
-    };
-
     for (int i = 0; i < fields.size(); ++i)
     {
-        appendString("--" + boundary + "\r\n");
-        appendString("Content-Disposition: form-data; name=" + quote(fields.getAllKeys()[i]) + "\r\n\r\n");
-        appendString(fields.getAllValues()[i] + "\r\n");
+        appendString(body, "--" + boundary + "\r\n");
+        appendString(body, "Content-Disposition: form-data; name=" + quote(fields.getAllKeys()[i]) + "\r\n\r\n");
+        appendString(body, fields.getAllValues()[i] + "\r\n");
     }
 
     if (file != nullptr)
-    {
-        appendString("--" + boundary + "\r\n");
-        appendString("Content-Disposition: form-data; name=" + quote(fileField) + "; filename=" + quote(file->getFileName()) + "\r\n");
-        appendString("Content-Type: " + mimeType + "\r\n\r\n");
-        body.append(file->loadFileAsData().getData(), file->loadFileAsData().getSize());
-        appendString("\r\n");
-    }
+        appendFilePart(body, boundary, fileField, *file, mimeType);
 
-    appendString("--" + boundary + "--\r\n");
+    appendString(body, "--" + boundary + "--\r\n");
     return body;
 }
 }
@@ -102,12 +111,44 @@ BridgeHttpClient::BridgeHttpClient(DiscoveryInfo discovered, ClientConfig client
 {
 }
 
+juce::String BridgeHttpClient::computeBodySha256Hex(const juce::String& body)
+{
+    return sha256Hex(body.toRawUTF8(), static_cast<size_t>(body.getNumBytesAsUTF8()));
+}
+
+juce::String BridgeHttpClient::computeSignatureHex(const juce::String& sharedSecret,
+                                                   const juce::String& timestamp,
+                                                   const juce::String& nonce,
+                                                   const juce::String& bodySha256Hex)
+{
+    return hmacSha256Hex(sharedSecret, timestamp + "." + nonce + "." + bodySha256Hex);
+}
+
+juce::StringArray BridgeHttpClient::assetImportRequiredFields()
+{
+    return { "normalizeOnImport", "file" };
+}
+
+juce::StringArray BridgeHttpClient::audioJobRequiredFields()
+{
+    return { "clientRequestId", "prompt", "metadata" };
+}
+
+juce::StringArray BridgeHttpClient::audioJobOptionalFields()
+{
+    return { "assetId", "file", "providerMode" };
+}
+
+juce::StringArray BridgeHttpClient::manualCompleteFieldNames()
+{
+    return { "mixFiles", "stemFiles", "tempoLockedStemFiles", "midiFiles" };
+}
+
 bool BridgeHttpClient::handshake(juce::String& errorOut)
 {
     HttpResponse response;
     if (! executeJson("GET", "/capabilities", "", response, errorOut))
         return false;
-
     if (response.statusCode < 200 || response.statusCode >= 300)
         return parseErrorPayload(response.payload, errorOut);
 
@@ -120,13 +161,6 @@ bool BridgeHttpClient::handshake(juce::String& errorOut)
 
     const auto minSupported = protocol.getProperty("min_supported", juce::var()).toString();
     const auto maxSupported = protocol.getProperty("max_supported", juce::var()).toString();
-    if (minSupported.isEmpty() || maxSupported.isEmpty())
-    {
-        errorOut = "Capabilities missing min/max protocol";
-        return false;
-    }
-
-    // Lightweight range check: same major and bounded lexical compare for this scaffold.
     if (config.protocolVersion < minSupported || config.protocolVersion > maxSupported)
     {
         errorOut = "Protocol version out of supported range: " + minSupported + "-" + maxSupported;
@@ -136,20 +170,41 @@ bool BridgeHttpClient::handshake(juce::String& errorOut)
     return true;
 }
 
+juce::var BridgeHttpClient::buildMetadata(const JobCreateOptions& options) const
+{
+    auto* md = new juce::DynamicObject();
+    if (options.metadata.isObject())
+        for (const auto& p : options.metadata.getDynamicObject()->getProperties())
+            md->setProperty(p.name, p.value);
+
+    md->setProperty("mode", toApiString(options.mode));
+    md->setProperty("one_shot", options.oneShot);
+    md->setProperty("loop", options.loop);
+    md->setProperty("bpm", options.bpm);
+    md->setProperty("key", options.key);
+
+    auto requested = requestedOutputsToApi(options.requestedOutputs);
+    md->setProperty("request_mix", requested.contains("mix"));
+    md->setProperty("request_stems", requested.contains("stems"));
+    md->setProperty("request_tempo_locked_stems", requested.contains("tempo_locked_stems"));
+    md->setProperty("request_midi", requested.contains("midi"));
+    return juce::var(md);
+}
+
 bool BridgeHttpClient::createTextJob(const juce::String& prompt,
-                                     const juce::var& metadata,
+                                     const JobCreateOptions& options,
                                      JobSummary& outJob,
                                      juce::String& errorOut)
 {
     juce::DynamicObject payload;
     payload.setProperty("clientRequestId", makeRequestId());
     payload.setProperty("prompt", prompt);
-    payload.setProperty("metadata", metadata);
+    payload.setProperty("providerMode", toApiString(options.providerMode));
+    payload.setProperty("metadata", buildMetadata(options));
 
     HttpResponse response;
     if (! executeJson("POST", "/jobs/text", juce::JSON::toString(&payload), response, errorOut))
         return false;
-
     if (response.statusCode < 200 || response.statusCode >= 300)
         return parseErrorPayload(response.payload, errorOut);
 
@@ -172,15 +227,9 @@ bool BridgeHttpClient::importAsset(const juce::File& source,
     fields.set("normalizeOnImport", normalizeOnImport ? "true" : "false");
 
     auto body = buildMultipartBody(boundary, fields, "file", &source, "application/octet-stream");
-
     HttpResponse response;
-    if (! executeMultipart("/assets/import",
-                           "multipart/form-data; boundary=" + boundary,
-                           body,
-                           response,
-                           errorOut))
+    if (! executeMultipart("/assets/import", "multipart/form-data; boundary=" + boundary, body, response, errorOut))
         return false;
-
     if (response.statusCode < 200 || response.statusCode >= 300)
         return parseErrorPayload(response.payload, errorOut);
 
@@ -190,13 +239,12 @@ bool BridgeHttpClient::importAsset(const juce::File& source,
         errorOut = "Asset import returned empty assetId";
         return false;
     }
-
     return true;
 }
 
 bool BridgeHttpClient::createAudioJob(const juce::String& assetId,
                                       const juce::String& prompt,
-                                      const juce::var& metadata,
+                                      const JobCreateOptions& options,
                                       JobSummary& outJob,
                                       juce::String& errorOut)
 {
@@ -204,19 +252,14 @@ bool BridgeHttpClient::createAudioJob(const juce::String& assetId,
     juce::StringPairArray fields;
     fields.set("clientRequestId", makeRequestId());
     fields.set("prompt", prompt);
-    fields.set("metadata", juce::JSON::toString(metadata));
+    fields.set("metadata", juce::JSON::toString(buildMetadata(options)));
     fields.set("assetId", assetId);
+    fields.set("providerMode", toApiString(options.providerMode));
 
     auto body = buildMultipartBody(boundary, fields, {}, nullptr, {});
-
     HttpResponse response;
-    if (! executeMultipart("/jobs/audio",
-                           "multipart/form-data; boundary=" + boundary,
-                           body,
-                           response,
-                           errorOut))
+    if (! executeMultipart("/jobs/audio", "multipart/form-data; boundary=" + boundary, body, response, errorOut))
         return false;
-
     if (response.statusCode < 200 || response.statusCode >= 300)
         return parseErrorPayload(response.payload, errorOut);
 
@@ -225,7 +268,7 @@ bool BridgeHttpClient::createAudioJob(const juce::String& assetId,
 
 bool BridgeHttpClient::createAudioJobWithFile(const juce::File& source,
                                               const juce::String& prompt,
-                                              const juce::var& metadata,
+                                              const JobCreateOptions& options,
                                               JobSummary& outJob,
                                               juce::String& errorOut)
 {
@@ -239,44 +282,72 @@ bool BridgeHttpClient::createAudioJobWithFile(const juce::File& source,
     juce::StringPairArray fields;
     fields.set("clientRequestId", makeRequestId());
     fields.set("prompt", prompt);
-    fields.set("metadata", juce::JSON::toString(metadata));
+    fields.set("metadata", juce::JSON::toString(buildMetadata(options)));
+    fields.set("providerMode", toApiString(options.providerMode));
 
     auto body = buildMultipartBody(boundary, fields, "file", &source, "application/octet-stream");
-
     HttpResponse response;
-    if (! executeMultipart("/jobs/audio",
-                           "multipart/form-data; boundary=" + boundary,
-                           body,
-                           response,
-                           errorOut))
+    if (! executeMultipart("/jobs/audio", "multipart/form-data; boundary=" + boundary, body, response, errorOut))
         return false;
-
     if (response.statusCode < 200 || response.statusCode >= 300)
         return parseErrorPayload(response.payload, errorOut);
 
     return parseJobFromPayload(response.payload.getProperty("job", juce::var()), outJob, errorOut);
 }
 
-bool BridgeHttpClient::getJob(const juce::String& jobId,
-                              JobSummary& outJob,
-                              juce::String& errorOut)
+bool BridgeHttpClient::getJob(const juce::String& jobId, JobSummary& outJob, juce::String& errorOut)
 {
     HttpResponse response;
     if (! executeJson("GET", "/jobs/" + jobId, "", response, errorOut))
         return false;
-
     if (response.statusCode < 200 || response.statusCode >= 300)
         return parseErrorPayload(response.payload, errorOut);
-
     return parseJobFromPayload(response.payload, outJob, errorOut);
 }
 
-bool BridgeHttpClient::cancelJob(const juce::String& jobId,
-                                 JobSummary& outJob,
-                                 juce::String& errorOut)
+bool BridgeHttpClient::cancelJob(const juce::String& jobId, JobSummary& outJob, juce::String& errorOut)
 {
     HttpResponse response;
     if (! executeJson("POST", "/jobs/" + jobId + "/cancel", "{}", response, errorOut))
+        return false;
+    if (response.statusCode < 200 || response.statusCode >= 300)
+        return parseErrorPayload(response.payload, errorOut);
+    return parseJobFromPayload(response.payload, outJob, errorOut);
+}
+
+bool BridgeHttpClient::getHandoff(const juce::String& jobId, HandoffInfo& outHandoff, juce::String& errorOut)
+{
+    HttpResponse response;
+    if (! executeJson("GET", "/jobs/" + jobId + "/handoff", "", response, errorOut))
+        return false;
+    if (response.statusCode < 200 || response.statusCode >= 300)
+        return parseErrorPayload(response.payload, errorOut);
+    return parseHandoffFromPayload(response.payload, outHandoff, errorOut);
+}
+
+bool BridgeHttpClient::manualComplete(const juce::String& jobId,
+                                      const ManualCompleteFiles& files,
+                                      JobSummary& outJob,
+                                      juce::String& errorOut)
+{
+    const auto boundary = "----SunoBoundary" + juce::Uuid().toString().removeCharacters("-");
+    juce::MemoryBlock body;
+
+    auto appendFamily = [&body, &boundary](const juce::Array<juce::File>& familyFiles, const juce::String& field)
+    {
+        for (const auto& file : familyFiles)
+            if (file.existsAsFile())
+                appendFilePart(body, boundary, field, file, "application/octet-stream");
+    };
+
+    appendFamily(files.mixFiles, "mixFiles");
+    appendFamily(files.stemFiles, "stemFiles");
+    appendFamily(files.tempoLockedStemFiles, "tempoLockedStemFiles");
+    appendFamily(files.midiFiles, "midiFiles");
+    appendString(body, "--" + boundary + "--\r\n");
+
+    HttpResponse response;
+    if (! executeMultipart("/jobs/" + jobId + "/manual-complete", "multipart/form-data; boundary=" + boundary, body, response, errorOut))
         return false;
 
     if (response.statusCode < 200 || response.statusCode >= 300)
@@ -296,13 +367,7 @@ bool BridgeHttpClient::executeJson(const juce::String& method,
                                    HttpResponse& out,
                                    juce::String& errorOut)
 {
-    return executeRequest(method,
-                          path,
-                          "application/json",
-                          jsonBody.toRawUTF8(),
-                          static_cast<size_t>(jsonBody.getNumBytesAsUTF8()),
-                          out,
-                          errorOut);
+    return executeRequest(method, path, "application/json", jsonBody.toRawUTF8(), static_cast<size_t>(jsonBody.getNumBytesAsUTF8()), out, errorOut);
 }
 
 bool BridgeHttpClient::executeMultipart(const juce::String& path,
@@ -382,6 +447,9 @@ bool BridgeHttpClient::parseJobFromPayload(const juce::var& payload, JobSummary&
     outJob.remoteJobId = obj->getProperty("remoteJobId").toString();
     outJob.progress = static_cast<float>(obj->getProperty("progress"));
     outJob.lastError = obj->getProperty("lastError").toString();
+    outJob.outputManifest = obj->getProperty("outputManifest");
+    outJob.providerMode = providerModeFromString(obj->getProperty("providerMode").toString());
+    outJob.providerMetadata = obj->getProperty("providerMetadata");
     outJob.outputAssets.clear();
 
     if (auto outputAssets = obj->getProperty("outputAssets"); outputAssets.isArray())
@@ -391,6 +459,32 @@ bool BridgeHttpClient::parseJobFromPayload(const juce::var& payload, JobSummary&
     if (outJob.id.isEmpty())
     {
         errorOut = "Job payload missing id";
+        return false;
+    }
+
+    return true;
+}
+
+bool BridgeHttpClient::parseHandoffFromPayload(const juce::var& payload,
+                                               HandoffInfo& outHandoff,
+                                               juce::String& errorOut) const
+{
+    if (! payload.isObject())
+    {
+        errorOut = "Handoff payload is not an object";
+        return false;
+    }
+
+    auto* obj = payload.getDynamicObject();
+    outHandoff.jobId = obj->getProperty("jobId").toString();
+    outHandoff.providerMode = providerModeFromString(obj->getProperty("providerMode").toString());
+    outHandoff.workspace = juce::File(obj->getProperty("workspace").toString());
+    outHandoff.instructionsPath = juce::File(obj->getProperty("instructionsPath").toString());
+    outHandoff.handoff = obj->getProperty("handoff");
+
+    if (outHandoff.jobId.isEmpty())
+    {
+        errorOut = "Handoff payload missing jobId";
         return false;
     }
 
@@ -415,7 +509,11 @@ bool BridgeHttpClient::parseErrorPayload(const juce::var& payload, juce::String&
     auto* obj = error.getDynamicObject();
     const auto code = obj->getProperty("code").toString();
     const auto message = obj->getProperty("message").toString();
+    const auto requestId = obj->getProperty("request_id").toString();
+
     errorOut = code + ": " + message;
+    if (requestId.isNotEmpty())
+        errorOut << " (request_id=" << requestId << ")";
     return false;
 }
 
@@ -423,7 +521,6 @@ juce::String BridgeHttpClient::buildSignature(const juce::String& timestamp,
                                               const juce::String& nonce,
                                               const juce::String& bodySha256Hex) const
 {
-    const auto payload = timestamp + "." + nonce + "." + bodySha256Hex;
-    return hmacSha256Hex(config.sharedSecret, payload);
+    return computeSignatureHex(config.sharedSecret, timestamp, nonce, bodySha256Hex);
 }
 } // namespace suno::bridge

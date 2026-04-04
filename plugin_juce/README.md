@@ -1,33 +1,40 @@
 # plugin_juce
 
-Thin JUCE client layer on top of the async Python bridge.
+JUCE client layer on top of the async Python bridge.
 
 ## Included targets
 
-- `SunoStudioBridgePlugin` (VST3/AU scaffold)
-- `SunoStudioBridgeStandalone` (primary debug surface in this phase)
-- shared static lib: `bridge_client`
+- `bridge_client` shared C++ client/controller/ui logic
+- `SunoStudioBridgePlugin` (VST3/AU)
+- `SunoStudioBridgeStandalone` (primary debug surface)
+- `BridgeContractVectors` (fixture-backed contract validation)
 
-## Shared client responsibilities
+## Shared surface parity
 
-- lockfile discovery support
-- dev-mode explicit endpoint support
-- protocol handshake (`/capabilities`)
-- HMAC header envelope emission
-- JSON + multipart bridge calls
-- canonical error parsing
-- state persistence
+Plugin and standalone both host `BridgeClientSurface` with:
 
-## Important limitations
+- Connect / Connect Dev
+- Submit text / import+submit audio
+- Provider mode and output-family selection
+- Manual handoff actions (`GET /jobs/{id}/handoff`)
+- Manual results import (`POST /jobs/{id}/manual-complete`)
+- restart restore of last active job via `/jobs/{id}`
+- reveal/drag-copy output path
 
-- JUCE keychain integration for shared-secret retrieval is not complete.
-  - discovery mode can still use manual shared-secret override.
-- This phase does not include real Suno automation.
-- This phase does not include universal DAW auto-insert or full ARA runtime.
+Preview is disabled intentionally in this milestone.
 
 ## Build
 
 ```bash
 cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
-cmake --build build/plugin_juce
+cmake --build build/plugin_juce --target bridge_client
+cmake --build build/plugin_juce --target SunoStudioBridgeStandalone
+cmake --build build/plugin_juce --target SunoStudioBridgePlugin
+cmake --build build/plugin_juce --target BridgeContractVectors
 ```
+
+## Scope limits
+
+- No real Suno browser/session automation.
+- No universal DAW auto-insert claims.
+- REAPER remains assisted/manual path.

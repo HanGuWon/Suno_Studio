@@ -19,12 +19,22 @@ PluginState PluginStateStore::load() const
 
     auto* obj = parsed.getDynamicObject();
     state.discoveryCachePath = juce::File(obj->getProperty("discoveryCachePath").toString());
-    state.mode = obj->getProperty("mode").toString();
+    state.mode = clientModeFromString(obj->getProperty("mode").toString());
+    state.providerMode = providerModeFromString(obj->getProperty("providerMode").toString());
+    state.soundOneShot = static_cast<bool>(obj->getProperty("soundOneShot"));
     state.soundLoop = static_cast<bool>(obj->getProperty("soundLoop"));
     state.bpmHint = static_cast<int>(obj->getProperty("bpmHint"));
     state.keyHint = obj->getProperty("keyHint").toString();
     state.lastSelectedOutputPath = obj->getProperty("lastSelectedOutputPath").toString();
     state.lastActiveJobId = obj->getProperty("lastActiveJobId").toString();
+    state.lastHandoffJobId = obj->getProperty("lastHandoffJobId").toString();
+    state.lastHandoffWorkspace = juce::File(obj->getProperty("lastHandoffWorkspace").toString());
+    state.lastHandoffInstructions = juce::File(obj->getProperty("lastHandoffInstructions").toString());
+    state.lastImportedFamilies = obj->getProperty("lastImportedFamilies");
+
+    auto outputs = requestedOutputsFromApi(obj->getProperty("requestedOutputs"));
+    if (! outputs.isEmpty())
+        state.requestedOutputs = outputs;
 
     if (auto recentJobs = obj->getProperty("recentJobIds"); recentJobs.isArray())
         for (const auto& value : *recentJobs.getArray())
@@ -45,12 +55,23 @@ void PluginStateStore::save(const PluginState& state) const
 {
     juce::DynamicObject root;
     root.setProperty("discoveryCachePath", state.discoveryCachePath.getFullPathName());
-    root.setProperty("mode", state.mode);
+    root.setProperty("mode", toApiString(state.mode));
+    root.setProperty("providerMode", toApiString(state.providerMode));
+    root.setProperty("soundOneShot", state.soundOneShot);
     root.setProperty("soundLoop", state.soundLoop);
     root.setProperty("bpmHint", state.bpmHint);
     root.setProperty("keyHint", state.keyHint);
     root.setProperty("lastSelectedOutputPath", state.lastSelectedOutputPath);
     root.setProperty("lastActiveJobId", state.lastActiveJobId);
+    root.setProperty("lastHandoffJobId", state.lastHandoffJobId);
+    root.setProperty("lastHandoffWorkspace", state.lastHandoffWorkspace.getFullPathName());
+    root.setProperty("lastHandoffInstructions", state.lastHandoffInstructions.getFullPathName());
+    root.setProperty("lastImportedFamilies", state.lastImportedFamilies);
+
+    juce::Array<juce::var> requested;
+    for (const auto& value : requestedOutputsToApi(state.requestedOutputs))
+        requested.add(value);
+    root.setProperty("requestedOutputs", requested);
 
     juce::Array<juce::var> recentJobs;
     for (const auto& id : state.recentJobIds)

@@ -5,7 +5,11 @@
   },
   "audio_job": {
     "required_fields": ["clientRequestId", "prompt", "metadata"],
-    "optional_fields": ["assetId", "file"],
+    "optional_fields": ["assetId", "file", "providerMode"],
+    "content_type_prefix": "multipart/form-data; boundary="
+  },
+  "manual_complete": {
+    "required_fields": ["mixFiles", "stemFiles", "tempoLockedStemFiles", "midiFiles"],
     "content_type_prefix": "multipart/form-data; boundary="
   }
 }

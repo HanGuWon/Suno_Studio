@@ -1,20 +1,41 @@
 # Plugin client architecture
 
-## Current layering
+## Layering
 
-1. `BridgeController`: connect, submit, poll, cancel, output state.
-2. `BridgeHttpClient`: protocol headers + HMAC + JSON/multipart calls.
-3. `PluginStateStore`: persisted context.
-4. Plugin and standalone surfaces.
+1. `BridgeModels`: provider mode, client mode, requested output families, handoff/state parsing helpers.
+2. `BridgeHttpClient`: HMAC handshake envelope + JSON/multipart endpoints including manual-provider endpoints.
+3. `BridgeController`: non-UI orchestration for both plugin and standalone.
+4. `PluginStateStore`: persisted pointers/context.
+5. `BridgeClientSurface`: shared JUCE component used by plugin editor and standalone app.
 
-## Provider-mode behavior
+## Restart-safe behavior
 
-Client requests can select `providerMode` (`mock_suno` or `manual_suno`).
+Persisted state is a pointer, not source-of-truth job state.
 
-For `manual_suno` jobs, the bridge lifecycle is explicit waiting + manual completion intake rather than remote polling automation.
+On reconnect the controller attempts to rehydrate from bridge APIs:
+
+- load `lastActiveJobId`
+- call `GET /jobs/{id}`
+- repopulate active job + outputs + manual waiting state
+- attempt `GET /jobs/{id}/handoff` for manual jobs
+
+## Manual-provider convergence
+
+The C++ client supports the existing bridge contract:
+
+- submit with `providerMode` on text/audio
+- request output families via metadata flags
+- fetch manual handoff package (`/jobs/{id}/handoff`)
+- import manual result files by family (`/jobs/{id}/manual-complete`)
+- render waiting states (`awaiting_manual_provider_submission`, `awaiting_manual_provider_result`, `importing_provider_result`)
+
+## Honest UX constraints
+
+- Preview is disabled in this milestone (no fake playback path claims).
+- Poll/connect/handoff errors are surfaced in the shared surface status text.
 
 ## Honest scope
 
-- No Suno automation/scraping logic.
-- No universal DAW auto-insert.
-- No ARA runtime in this phase.
+- No scraping/session automation.
+- No ARA runtime in this milestone.
+- No universal DAW timeline auto-insert.
