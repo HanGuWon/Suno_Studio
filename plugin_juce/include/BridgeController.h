@@ -19,6 +19,7 @@ public:
     bool importAndSubmitAudio(const juce::File& source, const juce::String& prompt, juce::String& errorOut);
     bool cancelActive(juce::String& errorOut);
     bool pollActive(juce::String& errorOut);
+    bool restoreLastActiveJob(juce::String& errorOut);
 
     bool fetchHandoff(juce::String& errorOut);
     bool revealHandoffFolder(juce::String& errorOut) const;
@@ -35,6 +36,7 @@ public:
     const juce::StringArray& getOutputFiles() const { return outputFiles; }
     const PluginState& getState() const { return state; }
     const HandoffInfo& getLastHandoff() const { return lastHandoff; }
+    const juce::var& getLastImportedFamilies() const { return state.lastImportedFamilies; }
 
     void selectOutputFile(const juce::String& path);
 

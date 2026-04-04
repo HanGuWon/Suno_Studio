@@ -33,6 +33,10 @@ bool BridgeController::connectWithDiscovery(const juce::File& lockfile,
 
     state.discoveryCachePath = lockfile;
     connected = true;
+    juce::String restoreError;
+    restoreLastActiveJob(restoreError);
+    if (restoreError.isNotEmpty())
+        errorOut = "Connected; resume warning: " + restoreError;
     persist();
     return true;
 }
@@ -57,6 +61,10 @@ bool BridgeController::connectDev(const juce::String& host,
     }
 
     connected = true;
+    juce::String restoreError;
+    restoreLastActiveJob(restoreError);
+    if (restoreError.isNotEmpty())
+        errorOut = "Connected; resume warning: " + restoreError;
     persist();
     return true;
 }
@@ -146,6 +154,49 @@ bool BridgeController::pollActive(juce::String& errorOut)
     outputFiles = activeJob.outputAssets;
     if (outputFiles.size() > 0)
         state.lastSelectedOutputPath = outputFiles[0];
+    persist();
+    return true;
+}
+
+bool BridgeController::restoreLastActiveJob(juce::String& errorOut)
+{
+    if (! connected || client == nullptr)
+    {
+        errorOut = "Bridge not connected";
+        return false;
+    }
+
+    const auto jobId = state.lastActiveJobId.trim();
+    if (jobId.isEmpty())
+        return true;
+
+    if (! client->getJob(jobId, activeJob, errorOut))
+    {
+        if (errorOut.startsWith("JOB_NOT_FOUND"))
+        {
+            state.lastActiveJobId.clear();
+            persist();
+        }
+        return false;
+    }
+
+    outputFiles = activeJob.outputAssets;
+
+    if (activeJob.providerMode == ProviderMode::ManualSuno)
+    {
+        juce::String handoffError;
+        if (client->getHandoff(jobId, lastHandoff, handoffError))
+        {
+            state.lastHandoffJobId = lastHandoff.jobId;
+            state.lastHandoffWorkspace = lastHandoff.workspace;
+            state.lastHandoffInstructions = lastHandoff.instructionsPath;
+        }
+        else if (! handoffError.startsWith("HANDOFF_NOT_READY"))
+        {
+            errorOut = "Job restored, handoff fetch warning: " + handoffError;
+        }
+    }
+
     persist();
     return true;
 }

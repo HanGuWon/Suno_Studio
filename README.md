@@ -1,4 +1,4 @@
-# Suno Studio — Async Bridge with Mock + Manual Suno Provider Modes
+# Suno Studio - Async Bridge with Mock + Manual Suno Provider Modes
 
 This repo provides:
 
@@ -22,9 +22,10 @@ The JUCE plugin and standalone now both expose the same shared client surface wi
 - requested output families (`mix`, `stems`, `tempo-locked stems`, `MIDI`)
 - sound fields (one-shot/loop, BPM, key)
 - handoff actions (`Prepare/Fetch`, `Reveal`, `Open instructions`)
-- manual result import (`manual-complete` endpoint), then preview/reveal/drag/copy
+- manual result import (`manual-complete` endpoint)
+- restart-safe reconnect restore (rehydrates active job + outputs from `/jobs/{id}`)
 
-No provider automation beyond `mock_suno` is introduced.
+Preview is intentionally disabled for now (no fake playback claims in plugin/standalone); use reveal/open externally.
 
 ## Bridge endpoints used now
 
@@ -55,6 +56,7 @@ cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUC
 cmake --build build/plugin_juce --target bridge_client
 cmake --build build/plugin_juce --target SunoStudioBridgeStandalone
 cmake --build build/plugin_juce --target SunoStudioBridgePlugin
+cmake --build build/plugin_juce --target BridgeContractVectors
 ```
 
 ## Tests

@@ -29,6 +29,16 @@ class BridgeHttpClient
 public:
     BridgeHttpClient(DiscoveryInfo discovery, ClientConfig config);
 
+    static juce::String computeBodySha256Hex(const juce::String& body);
+    static juce::String computeSignatureHex(const juce::String& sharedSecret,
+                                            const juce::String& timestamp,
+                                            const juce::String& nonce,
+                                            const juce::String& bodySha256Hex);
+    static juce::StringArray assetImportRequiredFields();
+    static juce::StringArray audioJobRequiredFields();
+    static juce::StringArray audioJobOptionalFields();
+    static juce::StringArray manualCompleteFieldNames();
+
     bool handshake(juce::String& errorOut);
     bool createTextJob(const juce::String& prompt, const JobCreateOptions& options, JobSummary& outJob, juce::String& errorOut);
     bool importAsset(const juce::File& source, bool normalizeOnImport, juce::String& outAssetId, juce::String& errorOut);

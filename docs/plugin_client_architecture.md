@@ -5,12 +5,23 @@
 1. `BridgeModels`: provider mode, client mode, requested output families, handoff/state parsing helpers.
 2. `BridgeHttpClient`: HMAC handshake envelope + JSON/multipart endpoints including manual-provider endpoints.
 3. `BridgeController`: non-UI orchestration for both plugin and standalone.
-4. `PluginStateStore`: persisted manual-mode and output-selection context.
+4. `PluginStateStore`: persisted pointers/manual-mode/output-selection context.
 5. `BridgeClientSurface`: shared JUCE component used by plugin editor and standalone app.
+
+## Restart-safe behavior
+
+Persisted state is a pointer, not source-of-truth job state.
+
+On reconnect the controller attempts to rehydrate from bridge APIs:
+
+- load `lastActiveJobId`
+- call `GET /jobs/{id}`
+- repopulate active job + outputs + manual waiting state
+- attempt `GET /jobs/{id}/handoff` for manual jobs
 
 ## Manual-provider convergence
 
-The C++ client now directly supports the existing bridge contract:
+The C++ client directly supports the existing bridge contract:
 
 - submit with `providerMode` on text/audio
 - request output families through metadata flags
@@ -20,7 +31,12 @@ The C++ client now directly supports the existing bridge contract:
 
 ## Persistence additions
 
-State now includes provider mode, requested output families, handoff paths, last imported family map, mode/BPM/key/loop options, active job id, and selected output path.
+State includes provider mode, requested output families, handoff paths, last imported family map, mode/BPM/key/loop options, active job id, and selected output path.
+
+## Honest UX constraints
+
+- Preview is disabled in this milestone (no fake playback path claims).
+- Poll/connect/handoff/action errors are surfaced in the shared surface status text.
 
 ## Honest scope
 

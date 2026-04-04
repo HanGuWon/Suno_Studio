@@ -7,7 +7,7 @@
 3. Choose mode + requested outputs.
 4. Submit text or audio prompt job.
 5. Poll updates in UI until complete.
-6. Preview/reveal/drag-copy result path.
+6. Reveal/drag-copy result path.
 
 ## 2) Manual Suno mode (human-in-the-loop)
 
@@ -17,10 +17,18 @@
 4. Wait for manual waiting state in UI.
 5. Run `Prepare / Fetch Handoff` and open/reveal workspace instructions.
 6. Generate and download files manually in Suno UI.
-7. Click `Import Suno Results` and select family files (mix/stems/tempo-locked/MIDI).
-8. Client calls `/jobs/{job_id}/manual-complete`, then preview/reveal/drag as usual.
+7. Click `Import Suno Results`; client prompts families that were requested and not already imported.
+8. Select any subset of families/files and import.
+9. Reveal/drag-copy outputs as usual.
 
-## 3) REAPER assisted path
+## 3) Restart / reconnect behavior
+
+1. Reconnect the client.
+2. Client rehydrates last active job from `GET /jobs/{id}`.
+3. For manual jobs, client also attempts to recover handoff details.
+4. Continue polling, handoff actions, or manual import.
+
+## 4) REAPER assisted path
 
 1. Use reveal or copied path from a completed output.
 2. Run REAPER helper scripts.

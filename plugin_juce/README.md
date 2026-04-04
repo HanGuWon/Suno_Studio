@@ -7,7 +7,7 @@ JUCE client layer on top of the async Python bridge.
 - `bridge_client` shared C++ client/controller/ui logic
 - `SunoStudioBridgePlugin` (VST3/AU)
 - `SunoStudioBridgeStandalone` (primary debug surface)
-- `BridgeContractVectors` (pure C++ contract-vector checks)
+- `BridgeContractVectors` (fixture-backed contract validation)
 
 ## Shared surface parity
 
@@ -18,7 +18,10 @@ Plugin and standalone now both host `BridgeClientSurface`, which exposes:
 - Provider mode and output-family selection
 - Manual handoff actions (`GET /jobs/{id}/handoff`)
 - Manual results import (`POST /jobs/{id}/manual-complete`)
-- Preview / reveal / drag-copy output path
+- restart restore of last active job via `/jobs/{id}`
+- reveal/drag-copy output path
+
+Preview is disabled intentionally in this milestone.
 
 ## Build
 

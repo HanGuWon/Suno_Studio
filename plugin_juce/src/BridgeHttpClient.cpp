@@ -111,6 +111,39 @@ BridgeHttpClient::BridgeHttpClient(DiscoveryInfo discovered, ClientConfig client
 {
 }
 
+juce::String BridgeHttpClient::computeBodySha256Hex(const juce::String& body)
+{
+    return sha256Hex(body.toRawUTF8(), static_cast<size_t>(body.getNumBytesAsUTF8()));
+}
+
+juce::String BridgeHttpClient::computeSignatureHex(const juce::String& sharedSecret,
+                                                   const juce::String& timestamp,
+                                                   const juce::String& nonce,
+                                                   const juce::String& bodySha256Hex)
+{
+    return hmacSha256Hex(sharedSecret, timestamp + "." + nonce + "." + bodySha256Hex);
+}
+
+juce::StringArray BridgeHttpClient::assetImportRequiredFields()
+{
+    return { "normalizeOnImport", "file" };
+}
+
+juce::StringArray BridgeHttpClient::audioJobRequiredFields()
+{
+    return { "clientRequestId", "prompt", "metadata" };
+}
+
+juce::StringArray BridgeHttpClient::audioJobOptionalFields()
+{
+    return { "assetId", "file", "providerMode" };
+}
+
+juce::StringArray BridgeHttpClient::manualCompleteFieldNames()
+{
+    return { "mixFiles", "stemFiles", "tempoLockedStemFiles", "midiFiles" };
+}
+
 bool BridgeHttpClient::handshake(juce::String& errorOut)
 {
     HttpResponse response;
@@ -488,6 +521,6 @@ juce::String BridgeHttpClient::buildSignature(const juce::String& timestamp,
                                               const juce::String& nonce,
                                               const juce::String& bodySha256Hex) const
 {
-    return hmacSha256Hex(config.sharedSecret, timestamp + "." + nonce + "." + bodySha256Hex);
+    return computeSignatureHex(config.sharedSecret, timestamp, nonce, bodySha256Hex);
 }
 } // namespace suno::bridge

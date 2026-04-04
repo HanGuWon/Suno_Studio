@@ -6,10 +6,11 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     : controller(PluginStateStore(std::move(stateFile)), ClientConfig()),
       surfaceName(std::move(surface))
 {
-    formatManager.registerBasicFormats();
     addAndMakeVisible(statusLabel);
     addAndMakeVisible(manualLabel);
+    addAndMakeVisible(importedLabel);
     manualLabel.setText("Manual mode states: awaiting submission/result/importing", juce::dontSendNotification);
+    importedLabel.setText("Imported deliverables: none", juce::dontSendNotification);
 
     prompt.setMultiLine(true);
     prompt.setTextToShowWhenEmpty("Prompt", juce::Colours::grey);
@@ -62,7 +63,8 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     configureButton(revealHandoff, "Reveal Handoff Folder");
     configureButton(openInstructions, "Open Handoff Instructions");
     configureButton(importResults, "Import Suno Results");
-    configureButton(preview, "Preview Result");
+    configureButton(preview, "Preview Result (disabled)");
+    preview.setEnabled(false);
     configureButton(reveal, "Reveal Result");
     configureButton(drag, "Drag / copy result path");
 
@@ -73,7 +75,6 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
             return;
         selected = juce::File(outputs.getItemText(outputs.getSelectedItemIndex()));
         controller.selectOutputFile(selected.getFullPathName());
-        loadPreview(selected);
     };
 
     if (controller.getState().lastSelectedOutputPath.isNotEmpty())
@@ -86,9 +87,6 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
 
 BridgeClientSurface::~BridgeClientSurface()
 {
-    transportSource.stop();
-    transportSource.setSource(nullptr);
-    readerSource.reset();
 }
 
 void BridgeClientSurface::configureButton(juce::TextButton& button, const juce::String& text)
@@ -121,6 +119,8 @@ void BridgeClientSurface::refreshStatus()
     if (job.id.isNotEmpty())
         stateText << " | job=" << job.id << " | status=" << job.status << " | provider=" << provider;
     statusLabel.setText("[" + surfaceName + "] " + stateText, juce::dontSendNotification);
+    if (lastActionMessage.isNotEmpty())
+        statusLabel.setText(statusLabel.getText() + " | " + (lastActionWasError ? "error: " : "info: ") + lastActionMessage, juce::dontSendNotification);
 
     if (isManualWaitingState(job.status))
         manualLabel.setText("manual_suno: waiting state = " + job.status, juce::dontSendNotification);
@@ -128,6 +128,8 @@ void BridgeClientSurface::refreshStatus()
         manualLabel.setText("manual_suno: imported/complete", juce::dontSendNotification);
     else
         manualLabel.setText("Manual mode states: awaiting submission/result/importing", juce::dontSendNotification);
+
+    importedLabel.setText("Imported deliverables: " + importedSummary(), juce::dontSendNotification);
 }
 
 void BridgeClientSurface::refreshOutputList()
@@ -139,21 +141,56 @@ void BridgeClientSurface::refreshOutputList()
     refreshStatus();
 }
 
-void BridgeClientSurface::chooseAndAddFiles(juce::Array<juce::File>& target, const juce::String& title)
+bool BridgeClientSurface::chooseAndAddFiles(juce::Array<juce::File>& target, const juce::String& title)
 {
     juce::FileChooser chooser(title);
     if (chooser.browseForMultipleFilesToOpen())
+    {
         target.addArray(chooser.getResults());
+        return true;
+    }
+    return false;
 }
 
-void BridgeClientSurface::loadPreview(const juce::File& file)
+int BridgeClientSurface::importedCount(const juce::String& familyKey) const
 {
-    auto* reader = formatManager.createReaderFor(file);
-    if (reader == nullptr)
-        return;
+    auto imported = controller.getLastImportedFamilies();
+    if (! imported.isObject())
+        return 0;
+    auto family = imported.getProperty(familyKey, juce::var());
+    if (! family.isArray())
+        return 0;
+    return family.getArray()->size();
+}
 
-    readerSource.reset(new juce::AudioFormatReaderSource(reader, true));
-    transportSource.setSource(readerSource.get(), 0, nullptr, reader->sampleRate);
+juce::String BridgeClientSurface::importedSummary() const
+{
+    return "mix=" + juce::String(importedCount("mix"))
+        + ", stems=" + juce::String(importedCount("stems"))
+        + ", tempoLockedStems=" + juce::String(importedCount("tempoLockedStems"))
+        + ", midi=" + juce::String(importedCount("midi"));
+}
+
+bool BridgeClientSurface::shouldRequestFamily(RequestedOutputFamily family) const
+{
+    const auto requested = controller.getState().requestedOutputs;
+    if (! requested.contains(family))
+        return false;
+
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return importedCount("mix") == 0;
+        case RequestedOutputFamily::Stems: return importedCount("stems") == 0;
+        case RequestedOutputFamily::TempoLockedStems: return importedCount("tempoLockedStems") == 0;
+        case RequestedOutputFamily::Midi: return importedCount("midi") == 0;
+    }
+    return false;
+}
+
+void BridgeClientSurface::setActionResult(const juce::String& text, bool isError)
+{
+    lastActionMessage = text;
+    lastActionWasError = isError;
 }
 
 void BridgeClientSurface::buttonClicked(juce::Button* b)
@@ -164,70 +201,106 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
     if (b == &connect)
     {
         auto lockfile = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(".suno_studio/bridge.lock");
-        controller.connectWithDiscovery(lockfile, {}, error);
+        if (! controller.connectWithDiscovery(lockfile, {}, error))
+            setActionResult(error, true);
+        else
+            setActionResult(error.isNotEmpty() ? error : "Connected via discovery", false);
     }
     else if (b == &connectDev)
     {
-        controller.connectDev("127.0.0.1", 7071, "dev-shared-secret", error);
+        if (! controller.connectDev("127.0.0.1", 7071, "dev-shared-secret", error))
+            setActionResult(error, true);
+        else
+            setActionResult(error.isNotEmpty() ? error : "Connected via dev endpoint", false);
     }
     else if (b == &submitText)
     {
-        controller.submitText(prompt.getText(), error);
+        if (! controller.submitText(prompt.getText(), error))
+            setActionResult(error, true);
+        else
+            setActionResult("Submitted text job", false);
     }
     else if (b == &importAudio)
     {
         juce::FileChooser chooser("Select local audio prompt file");
         if (chooser.browseForFileToOpen())
-            controller.importAndSubmitAudio(chooser.getResult(), prompt.getText(), error);
+        {
+            if (! controller.importAndSubmitAudio(chooser.getResult(), prompt.getText(), error))
+                setActionResult(error, true);
+            else
+                setActionResult("Submitted audio prompt job", false);
+        }
     }
     else if (b == &cancel)
     {
-        controller.cancelActive(error);
+        if (! controller.cancelActive(error))
+            setActionResult(error, true);
+        else
+            setActionResult("Cancel requested", false);
     }
     else if (b == &fetchHandoff)
     {
-        controller.fetchHandoff(error);
+        if (! controller.fetchHandoff(error))
+            setActionResult(error, true);
+        else
+            setActionResult("Handoff fetched", false);
     }
     else if (b == &revealHandoff)
     {
-        controller.revealHandoffFolder(error);
+        if (! controller.revealHandoffFolder(error))
+            setActionResult(error, true);
+        else
+            setActionResult("Handoff folder revealed", false);
     }
     else if (b == &openInstructions)
     {
-        controller.openHandoffInstructions(error);
+        if (! controller.openHandoffInstructions(error))
+            setActionResult(error, true);
+        else
+            setActionResult("Opened handoff instructions", false);
     }
     else if (b == &importResults)
     {
         mixFiles.clear(); stemFiles.clear(); tempoLockedStemFiles.clear(); midiFiles.clear();
-        chooseAndAddFiles(mixFiles, "Pick mix result file(s)");
-        chooseAndAddFiles(stemFiles, "Pick stem result file(s)");
-        chooseAndAddFiles(tempoLockedStemFiles, "Pick tempo-locked stem file(s)");
-        chooseAndAddFiles(midiFiles, "Pick MIDI file(s)");
+        if (shouldRequestFamily(RequestedOutputFamily::Mix))
+            chooseAndAddFiles(mixFiles, "Pick mix result file(s)");
+        if (shouldRequestFamily(RequestedOutputFamily::Stems))
+            chooseAndAddFiles(stemFiles, "Pick stem result file(s)");
+        if (shouldRequestFamily(RequestedOutputFamily::TempoLockedStems))
+            chooseAndAddFiles(tempoLockedStemFiles, "Pick tempo-locked stem file(s)");
+        if (shouldRequestFamily(RequestedOutputFamily::Midi))
+            chooseAndAddFiles(midiFiles, "Pick MIDI file(s)");
+
+        if (mixFiles.isEmpty() && stemFiles.isEmpty() && tempoLockedStemFiles.isEmpty() && midiFiles.isEmpty())
+        {
+            setActionResult("No files selected. Manual complete was not sent.", false);
+            refreshOutputList();
+            return;
+        }
 
         ManualCompleteFiles completion;
         completion.mixFiles = mixFiles;
         completion.stemFiles = stemFiles;
         completion.tempoLockedStemFiles = tempoLockedStemFiles;
         completion.midiFiles = midiFiles;
-        controller.manualCompleteActive(completion, error);
+        if (! controller.manualCompleteActive(completion, error))
+            setActionResult(error, true);
+        else
+            setActionResult("Imported selected deliverables", false);
     }
     else if (b == &preview)
     {
-        if (selected.existsAsFile())
-        {
-            if (transportSource.isPlaying())
-                transportSource.stop();
-            else
-            {
-                transportSource.setPosition(0.0);
-                transportSource.start();
-            }
-        }
+        setActionResult("Preview is disabled in this milestone (use reveal/open externally).", false);
     }
     else if (b == &reveal)
     {
         if (selected.existsAsFile())
+        {
             selected.revealToUser();
+            setActionResult("Revealed selected result.", false);
+        }
+        else
+            setActionResult("No selected result file to reveal.", true);
     }
     else if (b == &drag)
     {
@@ -235,11 +308,11 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
         {
             performExternalDragDropOfFiles({ selected.getFullPathName() }, false);
             juce::SystemClipboard::copyTextToClipboard(selected.getFullPathName());
+            setActionResult("Copied output path and initiated drag.", false);
         }
+        else
+            setActionResult("No selected result file for drag/copy.", true);
     }
-
-    if (error.isNotEmpty())
-        statusLabel.setText("Error: " + error, juce::dontSendNotification);
 
     refreshOutputList();
 }
@@ -247,7 +320,8 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
 void BridgeClientSurface::timerCallback()
 {
     juce::String error;
-    controller.pollActive(error);
+    if (! controller.pollActive(error) && error.isNotEmpty())
+        setActionResult("Poll warning: " + error, true);
     refreshOutputList();
 }
 
@@ -256,6 +330,7 @@ void BridgeClientSurface::resized()
     auto area = getLocalBounds().reduced(8);
     statusLabel.setBounds(area.removeFromTop(22));
     manualLabel.setBounds(area.removeFromTop(20));
+    importedLabel.setBounds(area.removeFromTop(20));
 
     auto providerRow = area.removeFromTop(24);
     providerMode.setBounds(providerRow.removeFromLeft(180));
