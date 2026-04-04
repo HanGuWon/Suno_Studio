@@ -1,4 +1,4 @@
-# Suno Studio — Async Bridge with Mock + Manual Suno Provider Modes
+# Suno Studio - Async Bridge with Mock + Manual Suno Provider Modes
 
 This repo provides:
 
@@ -15,7 +15,7 @@ This repo provides:
 
 ## Client reality in this milestone
 
-The JUCE plugin and standalone share one client surface with:
+The JUCE plugin and standalone now both expose the same shared client surface with:
 
 - provider selector (`mock_suno` / `manual_suno`)
 - mode selector (`Song`, `Sound`, `Audio Prompt`)
@@ -63,6 +63,7 @@ cmake --build build/plugin_juce --target BridgeContractVectors
 
 ```bash
 pytest -q
+cmake --build build/plugin_juce --target BridgeContractVectors
 ./build/plugin_juce/BridgeContractVectors
 ```
 

@@ -11,7 +11,7 @@ JUCE client layer on top of the async Python bridge.
 
 ## Shared surface parity
 
-Plugin and standalone both host `BridgeClientSurface` with:
+Plugin and standalone now both host `BridgeClientSurface`, which exposes:
 
 - Connect / Connect Dev
 - Submit text / import+submit audio
