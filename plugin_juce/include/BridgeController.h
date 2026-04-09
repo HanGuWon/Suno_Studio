@@ -19,6 +19,7 @@ public:
     bool importAndSubmitAudio(const juce::File& source, const juce::String& prompt, juce::String& errorOut);
     bool cancelActive(juce::String& errorOut);
     bool pollActive(juce::String& errorOut);
+    bool restoreLastJob(juce::String& errorOut);
 
     bool fetchHandoff(juce::String& errorOut);
     bool revealHandoffFolder(juce::String& errorOut) const;
@@ -40,6 +41,7 @@ public:
 
 private:
     JobCreateOptions makeJobOptions() const;
+    void cacheImportedFamiliesFromActiveJob();
     void persist();
 
     PluginStateStore stateStore;

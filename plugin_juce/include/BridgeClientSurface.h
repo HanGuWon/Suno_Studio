@@ -1,6 +1,5 @@
 #pragma once
 
-#include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include "BridgeController.h"
@@ -23,8 +22,11 @@ private:
     void updateControllerSettings();
     void refreshStatus();
     void refreshOutputList();
+    bool shouldPromptForFamily(RequestedOutputFamily family) const;
+    bool hasImportedFamily(RequestedOutputFamily family) const;
+    bool isFamilyRequested(RequestedOutputFamily family) const;
+    juce::String manualImportSummary() const;
     void chooseAndAddFiles(juce::Array<juce::File>& target, const juce::String& title);
-    void loadPreview(const juce::File& file);
 
     void buttonClicked(juce::Button* button) override;
     void timerCallback() override;
@@ -67,8 +69,6 @@ private:
     juce::Array<juce::File> midiFiles;
 
     juce::File selected;
-    juce::AudioFormatManager formatManager;
-    juce::AudioTransportSource transportSource;
-    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    juce::String lastUiError;
 };
 } // namespace suno::bridge

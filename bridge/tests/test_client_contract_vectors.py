@@ -38,19 +38,14 @@ def test_signing_vectors_match_python_request_signer():
 def test_multipart_contract_vectors_present():
     vectors = json.loads(Path("plugin_juce/test_vectors/multipart_vectors.json").read_text(encoding="utf-8"))
 
+    assert vectors["content_type_prefix"] == "multipart/form-data; boundary="
     assert vectors["asset_import"]["required_fields"] == ["normalizeOnImport", "file"]
-    assert vectors["audio_job"]["required_fields"] == ["clientRequestId", "prompt", "metadata"]
+    assert vectors["audio_job"]["required_fields"] == ["clientRequestId", "prompt", "metadata", "providerMode"]
     assert "assetId" in vectors["audio_job"]["optional_fields"]
     assert "file" in vectors["audio_job"]["optional_fields"]
+    assert vectors["manual_complete"]["required_fields"] == ["mixFiles", "stemFiles", "tempoLockedStemFiles", "midiFiles"]
 
 
 def test_canonical_error_payload_shape_fixture():
-    sample = {
-        "error": {
-            "code": "PROTOCOL_VERSION_UNSUPPORTED",
-            "message": "Protocol 9.9 is newer than provider support.",
-            "details": {"requested": "9.9"},
-            "request_id": "req-123",
-        }
-    }
-    assert set(sample["error"].keys()) == {"code", "message", "details", "request_id"}
+    vectors = json.loads(Path("plugin_juce/test_vectors/manual_contract_vectors.json").read_text(encoding="utf-8"))
+    assert set(vectors["canonical_error_shape"]["error"].keys()) == {"code", "message", "details", "request_id"}
