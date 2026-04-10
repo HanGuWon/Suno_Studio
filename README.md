@@ -21,8 +21,11 @@ The JUCE plugin and standalone now both expose the same shared client surface wi
 - mode selector (`Song`, `Sound`, `Audio Prompt`)
 - requested output families (`mix`, `stems`, `tempo-locked stems`, `MIDI`)
 - sound fields (one-shot/loop, BPM, key)
+- restart-safe reconnect that rehydrates `lastActiveJobId` from `GET /jobs/{id}`
 - handoff actions (`Prepare/Fetch`, `Reveal`, `Open instructions`)
-- manual result import (`manual-complete` endpoint), then preview/reveal/drag/copy
+- manual result import (`manual-complete` endpoint) for only requested + pending families, then reveal/drag/copy
+
+Preview is intentionally disabled for now across plugin + standalone until a full playback path is implemented.
 
 No provider automation beyond `mock_suno` is introduced.
 

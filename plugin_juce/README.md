@@ -18,7 +18,8 @@ Plugin and standalone now both host `BridgeClientSurface`, which exposes:
 - Provider mode and output-family selection
 - Manual handoff actions (`GET /jobs/{id}/handoff`)
 - Manual results import (`POST /jobs/{id}/manual-complete`)
-- Preview / reveal / drag-copy output path
+- Restart-safe reconnect using persisted `lastActiveJobId` + `GET /jobs/{id}` rehydration
+- Reveal / drag-copy output path (preview currently disabled)
 
 ## Build
 
