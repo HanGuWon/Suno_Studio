@@ -34,7 +34,8 @@ bool BridgeController::connectWithDiscovery(const juce::File& lockfile,
     state.discoveryCachePath = lockfile;
     connected = true;
     juce::String restoreError;
-    if (! restoreLastJob(restoreError) && restoreError.isNotEmpty())
+    restoreLastJob(restoreError);
+    if (restoreError.isNotEmpty())
         errorOut = "Connected, but failed to restore last job: " + restoreError;
     persist();
     return true;
@@ -61,7 +62,8 @@ bool BridgeController::connectDev(const juce::String& host,
 
     connected = true;
     juce::String restoreError;
-    if (! restoreLastJob(restoreError) && restoreError.isNotEmpty())
+    restoreLastJob(restoreError);
+    if (restoreError.isNotEmpty())
         errorOut = "Connected, but failed to restore last job: " + restoreError;
     persist();
     return true;
