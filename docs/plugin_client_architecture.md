@@ -22,6 +22,12 @@ The C++ client now directly supports the existing bridge contract:
 
 State now includes provider mode, requested output families, handoff paths, last imported family map, mode/BPM/key/loop options, active job id, and selected output path.
 
+Persisted job state is treated as a pointer only: on reconnect the client re-fetches `GET /jobs/{id}` for `lastActiveJobId` and rehydrates active job data, outputs, manual waiting state, and handoff metadata when available.
+
+## Preview semantics
+
+Preview is explicitly disabled in the shared JUCE surface for this milestone. The UI keeps reveal/drag-copy actions only, and does not claim plugin-editor playback support without a real host-safe playback path.
+
 ## Honest scope
 
 - No scraping/session automation.

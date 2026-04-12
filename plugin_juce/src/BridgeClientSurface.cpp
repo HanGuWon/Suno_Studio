@@ -2,14 +2,55 @@
 
 namespace suno::bridge
 {
+namespace
+{
+juce::String importedDeliverablesKey(RequestedOutputFamily family)
+{
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return "mix";
+        case RequestedOutputFamily::Stems: return "stems";
+        case RequestedOutputFamily::TempoLockedStems: return "tempoLockedStems";
+        case RequestedOutputFamily::Midi: return "midi";
+    }
+
+    return "mix";
+}
+
+juce::String requestedDeliverablesKey(RequestedOutputFamily family)
+{
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return "mix";
+        case RequestedOutputFamily::Stems: return "stems";
+        case RequestedOutputFamily::TempoLockedStems: return "tempo_locked_stems";
+        case RequestedOutputFamily::Midi: return "midi";
+    }
+
+    return "mix";
+}
+
+juce::String requestedDeliverablesCamelKey(RequestedOutputFamily family)
+{
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return "mix";
+        case RequestedOutputFamily::Stems: return "stems";
+        case RequestedOutputFamily::TempoLockedStems: return "tempoLockedStems";
+        case RequestedOutputFamily::Midi: return "midi";
+    }
+
+    return "mix";
+}
+}
+
 BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surface)
     : controller(PluginStateStore(std::move(stateFile)), ClientConfig()),
       surfaceName(std::move(surface))
 {
-    formatManager.registerBasicFormats();
     addAndMakeVisible(statusLabel);
     addAndMakeVisible(manualLabel);
-    manualLabel.setText("Manual mode states: awaiting submission/result/importing", juce::dontSendNotification);
+    manualLabel.setText("Manual mode states: awaiting submission/result/importing | preview disabled", juce::dontSendNotification);
 
     prompt.setMultiLine(true);
     prompt.setTextToShowWhenEmpty("Prompt", juce::Colours::grey);
@@ -62,7 +103,8 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     configureButton(revealHandoff, "Reveal Handoff Folder");
     configureButton(openInstructions, "Open Handoff Instructions");
     configureButton(importResults, "Import Suno Results");
-    configureButton(preview, "Preview Result");
+    configureButton(preview, "Preview Unavailable");
+    preview.setEnabled(false);
     configureButton(reveal, "Reveal Result");
     configureButton(drag, "Drag / copy result path");
 
@@ -73,7 +115,6 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
             return;
         selected = juce::File(outputs.getItemText(outputs.getSelectedItemIndex()));
         controller.selectOutputFile(selected.getFullPathName());
-        loadPreview(selected);
     };
 
     if (controller.getState().lastSelectedOutputPath.isNotEmpty())
@@ -86,9 +127,6 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
 
 BridgeClientSurface::~BridgeClientSurface()
 {
-    transportSource.stop();
-    transportSource.setSource(nullptr);
-    readerSource.reset();
 }
 
 void BridgeClientSurface::configureButton(juce::TextButton& button, const juce::String& text)
@@ -120,14 +158,16 @@ void BridgeClientSurface::refreshStatus()
     auto stateText = controller.isConnected() ? "connected" : "disconnected";
     if (job.id.isNotEmpty())
         stateText << " | job=" << job.id << " | status=" << job.status << " | provider=" << provider;
+    if (lastUiError.isNotEmpty())
+        stateText << " | error=" << lastUiError;
     statusLabel.setText("[" + surfaceName + "] " + stateText, juce::dontSendNotification);
 
     if (isManualWaitingState(job.status))
-        manualLabel.setText("manual_suno: waiting state = " + job.status, juce::dontSendNotification);
+        manualLabel.setText("manual_suno: waiting state = " + job.status + " | " + manualImportSummary() + " | preview disabled", juce::dontSendNotification);
     else if (job.status == "complete" && job.providerMode == ProviderMode::ManualSuno)
-        manualLabel.setText("manual_suno: imported/complete", juce::dontSendNotification);
+        manualLabel.setText("manual_suno: imported/complete | " + manualImportSummary() + " | preview disabled", juce::dontSendNotification);
     else
-        manualLabel.setText("Manual mode states: awaiting submission/result/importing", juce::dontSendNotification);
+        manualLabel.setText("Manual mode states: awaiting submission/result/importing | " + manualImportSummary() + " | preview disabled", juce::dontSendNotification);
 }
 
 void BridgeClientSurface::refreshOutputList()
@@ -146,16 +186,6 @@ void BridgeClientSurface::chooseAndAddFiles(juce::Array<juce::File>& target, con
         target.addArray(chooser.getResults());
 }
 
-void BridgeClientSurface::loadPreview(const juce::File& file)
-{
-    auto* reader = formatManager.createReaderFor(file);
-    if (reader == nullptr)
-        return;
-
-    readerSource.reset(new juce::AudioFormatReaderSource(reader, true));
-    transportSource.setSource(readerSource.get(), 0, nullptr, reader->sampleRate);
-}
-
 void BridgeClientSurface::buttonClicked(juce::Button* b)
 {
     updateControllerSettings();
@@ -164,11 +194,13 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
     if (b == &connect)
     {
         auto lockfile = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(".suno_studio/bridge.lock");
-        controller.connectWithDiscovery(lockfile, {}, error);
+        if (controller.connectWithDiscovery(lockfile, {}, error))
+            lastUiError.clear();
     }
     else if (b == &connectDev)
     {
-        controller.connectDev("127.0.0.1", 7071, "dev-shared-secret", error);
+        if (controller.connectDev("127.0.0.1", 7071, "dev-shared-secret", error))
+            lastUiError.clear();
     }
     else if (b == &submitText)
     {
@@ -198,31 +230,34 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
     }
     else if (b == &importResults)
     {
-        mixFiles.clear(); stemFiles.clear(); tempoLockedStemFiles.clear(); midiFiles.clear();
-        chooseAndAddFiles(mixFiles, "Pick mix result file(s)");
-        chooseAndAddFiles(stemFiles, "Pick stem result file(s)");
-        chooseAndAddFiles(tempoLockedStemFiles, "Pick tempo-locked stem file(s)");
-        chooseAndAddFiles(midiFiles, "Pick MIDI file(s)");
+        mixFiles.clear();
+        stemFiles.clear();
+        tempoLockedStemFiles.clear();
+        midiFiles.clear();
+
+        if (shouldPromptForFamily(RequestedOutputFamily::Mix))
+            chooseAndAddFiles(mixFiles, "Pick mix result file(s)");
+        if (shouldPromptForFamily(RequestedOutputFamily::Stems))
+            chooseAndAddFiles(stemFiles, "Pick stem result file(s)");
+        if (shouldPromptForFamily(RequestedOutputFamily::TempoLockedStems))
+            chooseAndAddFiles(tempoLockedStemFiles, "Pick tempo-locked stem file(s)");
+        if (shouldPromptForFamily(RequestedOutputFamily::Midi))
+            chooseAndAddFiles(midiFiles, "Pick MIDI file(s)");
+
+        if (mixFiles.isEmpty() && stemFiles.isEmpty() && tempoLockedStemFiles.isEmpty() && midiFiles.isEmpty())
+        {
+            lastUiError = "Manual import cancelled: no files selected.";
+            refreshOutputList();
+            return;
+        }
 
         ManualCompleteFiles completion;
         completion.mixFiles = mixFiles;
         completion.stemFiles = stemFiles;
         completion.tempoLockedStemFiles = tempoLockedStemFiles;
         completion.midiFiles = midiFiles;
-        controller.manualCompleteActive(completion, error);
-    }
-    else if (b == &preview)
-    {
-        if (selected.existsAsFile())
-        {
-            if (transportSource.isPlaying())
-                transportSource.stop();
-            else
-            {
-                transportSource.setPosition(0.0);
-                transportSource.start();
-            }
-        }
+        if (controller.manualCompleteActive(completion, error))
+            lastUiError.clear();
     }
     else if (b == &reveal)
     {
@@ -239,7 +274,9 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
     }
 
     if (error.isNotEmpty())
-        statusLabel.setText("Error: " + error, juce::dontSendNotification);
+        lastUiError = error;
+    else
+        lastUiError.clear();
 
     refreshOutputList();
 }
@@ -247,8 +284,53 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
 void BridgeClientSurface::timerCallback()
 {
     juce::String error;
-    controller.pollActive(error);
+    if (! controller.pollActive(error) && error.isNotEmpty())
+        lastUiError = "Poll error: " + error;
     refreshOutputList();
+}
+
+bool BridgeClientSurface::hasImportedFamily(RequestedOutputFamily family) const
+{
+    auto imported = controller.getState().lastImportedFamilies;
+    if (! imported.isObject())
+        imported = controller.getActiveJob().outputManifest.getProperty("importedDeliverables", juce::var());
+
+    if (! imported.isObject())
+        return false;
+
+    auto files = imported.getProperty(importedDeliverablesKey(family), juce::var());
+    return files.isArray() && files.getArray()->size() > 0;
+}
+
+bool BridgeClientSurface::isFamilyRequested(RequestedOutputFamily family) const
+{
+    auto requested = controller.getActiveJob().outputManifest.getProperty("requestedDeliverables", juce::var());
+    if (requested.isObject())
+    {
+        const auto snakeCase = static_cast<bool>(requested.getProperty(requestedDeliverablesKey(family), juce::var(false)));
+        const auto camelCase = static_cast<bool>(requested.getProperty(requestedDeliverablesCamelKey(family), juce::var(false)));
+        return snakeCase || camelCase;
+    }
+
+    return controller.getState().requestedOutputs.contains(family);
+}
+
+bool BridgeClientSurface::shouldPromptForFamily(RequestedOutputFamily family) const
+{
+    return isFamilyRequested(family) && ! hasImportedFamily(family);
+}
+
+juce::String BridgeClientSurface::manualImportSummary() const
+{
+    juce::StringArray imported;
+    if (hasImportedFamily(RequestedOutputFamily::Mix)) imported.add("mix");
+    if (hasImportedFamily(RequestedOutputFamily::Stems)) imported.add("stems");
+    if (hasImportedFamily(RequestedOutputFamily::TempoLockedStems)) imported.add("tempo_locked_stems");
+    if (hasImportedFamily(RequestedOutputFamily::Midi)) imported.add("midi");
+
+    if (imported.isEmpty())
+        return "imported: none";
+    return "imported: " + imported.joinIntoString(", ");
 }
 
 void BridgeClientSurface::resized()

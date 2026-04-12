@@ -1,11 +1,31 @@
 {
   "asset_import": {
-    "required_fields": ["normalizeOnImport", "file"],
+    "required_fields": [
+      "normalizeOnImport",
+      "file"
+    ],
     "content_type_prefix": "multipart/form-data; boundary="
   },
   "audio_job": {
-    "required_fields": ["clientRequestId", "prompt", "metadata"],
-    "optional_fields": ["assetId", "file"],
+    "required_fields": [
+      "clientRequestId",
+      "prompt",
+      "metadata",
+      "providerMode"
+    ],
+    "optional_fields": [
+      "assetId",
+      "file"
+    ],
     "content_type_prefix": "multipart/form-data; boundary="
+  },
+  "content_type_prefix": "multipart/form-data; boundary=",
+  "manual_complete": {
+    "required_fields": [
+      "mixFiles",
+      "stemFiles",
+      "tempoLockedStemFiles",
+      "midiFiles"
+    ]
   }
 }

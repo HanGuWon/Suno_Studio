@@ -33,6 +33,10 @@ bool BridgeController::connectWithDiscovery(const juce::File& lockfile,
 
     state.discoveryCachePath = lockfile;
     connected = true;
+    juce::String restoreError;
+    restoreLastJob(restoreError);
+    if (restoreError.isNotEmpty())
+        errorOut = "Connected, but failed to restore last job: " + restoreError;
     persist();
     return true;
 }
@@ -57,6 +61,10 @@ bool BridgeController::connectDev(const juce::String& host,
     }
 
     connected = true;
+    juce::String restoreError;
+    restoreLastJob(restoreError);
+    if (restoreError.isNotEmpty())
+        errorOut = "Connected, but failed to restore last job: " + restoreError;
     persist();
     return true;
 }
@@ -146,6 +154,48 @@ bool BridgeController::pollActive(juce::String& errorOut)
     outputFiles = activeJob.outputAssets;
     if (outputFiles.size() > 0)
         state.lastSelectedOutputPath = outputFiles[0];
+    cacheImportedFamiliesFromActiveJob();
+    persist();
+    return true;
+}
+
+bool BridgeController::restoreLastJob(juce::String& errorOut)
+{
+    if (! connected || client == nullptr)
+    {
+        errorOut = "Bridge not connected";
+        return false;
+    }
+
+    if (state.lastActiveJobId.isEmpty())
+        return true;
+
+    if (! client->getJob(state.lastActiveJobId, activeJob, errorOut))
+        return false;
+
+    outputFiles = activeJob.outputAssets;
+    cacheImportedFamiliesFromActiveJob();
+
+    if (activeJob.providerMode == ProviderMode::ManualSuno)
+    {
+        juce::String handoffError;
+        HandoffInfo fetchedHandoff;
+        if (client->getHandoff(activeJob.id, fetchedHandoff, handoffError))
+        {
+            lastHandoff = fetchedHandoff;
+            state.lastHandoffJobId = lastHandoff.jobId;
+            state.lastHandoffWorkspace = lastHandoff.workspace;
+            state.lastHandoffInstructions = lastHandoff.instructionsPath;
+        }
+        else if (! handoffError.contains("HANDOFF_NOT_READY"))
+        {
+            errorOut = "Job restored but handoff fetch failed: " + handoffError;
+        }
+    }
+
+    if (outputFiles.size() > 0 && state.lastSelectedOutputPath.isEmpty())
+        state.lastSelectedOutputPath = outputFiles[0];
+
     persist();
     return true;
 }
@@ -203,10 +253,8 @@ bool BridgeController::manualCompleteActive(const ManualCompleteFiles& files, ju
     if (! client->manualComplete(activeJob.id, files, activeJob, errorOut))
         return false;
 
-    if (activeJob.outputManifest.isObject())
-        state.lastImportedFamilies = activeJob.outputManifest.getProperty("importedDeliverables", juce::var());
-
     outputFiles = activeJob.outputAssets;
+    cacheImportedFamiliesFromActiveJob();
     persist();
     return true;
 }
@@ -251,5 +299,13 @@ void BridgeController::selectOutputFile(const juce::String& path)
 void BridgeController::persist()
 {
     stateStore.save(state);
+}
+
+void BridgeController::cacheImportedFamiliesFromActiveJob()
+{
+    if (! activeJob.outputManifest.isObject())
+        return;
+
+    state.lastImportedFamilies = activeJob.outputManifest.getProperty("importedDeliverables", juce::var());
 }
 } // namespace suno::bridge

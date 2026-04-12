@@ -5,12 +5,16 @@
     {
       "timestamp": 1712000000,
       "nonce": "fixed-nonce-1",
-      "body": "{\"hello\":\"world\"}"
+      "body": "{\"hello\":\"world\"}",
+      "expected_body_sha256": "93a23971a914e5eacbf0a8d25154cda309c3c1c72fbb9914d47c60f3cb681588",
+      "expected_signature": "fc9710839e596845ff17d47b611b3ef728f7bd81225ce513aa8b3b564b2207e3"
     },
     {
       "timestamp": 1712000001,
       "nonce": "fixed-nonce-2",
-      "body": ""
+      "body": "",
+      "expected_body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expected_signature": "361facee0cb6d94b432c40070b10844edcae290fea9a71e75410139388eb146e"
     }
   ]
 }
