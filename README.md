@@ -1,4 +1,4 @@
-# Suno Studio — Async Bridge with Mock + Manual Suno Provider Modes
+# Suno Studio - Async Bridge with Mock + Manual Suno Provider Modes
 
 This repo provides:
 
@@ -11,7 +11,8 @@ This repo provides:
 
 - `mock_suno` (default): bridge worker submits/polls/downloads automatically.
 - `manual_suno`: bridge prepares handoff workspace and waits for explicit manual import.
-- placeholders only: `official_api`, `web_session`.
+- Beta runtime accepts only `mock_suno` and `manual_suno`.
+- `official_api`, `web_session` remain future-scope placeholders and are rejected by the bridge in this milestone.
 
 ## Client reality in this milestone
 
@@ -22,12 +23,13 @@ The JUCE plugin and standalone now both expose the same shared client surface wi
 - requested output families (`mix`, `stems`, `tempo-locked stems`, `MIDI`)
 - sound fields (one-shot/loop, BPM, key)
 - restart-safe reconnect that rehydrates `lastActiveJobId` from `GET /jobs/{id}`
+- restore warnings surfaced in the shared status text after reconnect
 - handoff actions (`Prepare/Fetch`, `Reveal`, `Open instructions`)
 - manual result import (`manual-complete` endpoint) for only requested + pending families, then reveal/drag/copy
 
 Preview is intentionally disabled for now across plugin + standalone until a full playback path is implemented.
 
-No provider automation beyond `mock_suno` is introduced.
+No provider automation beyond `mock_suno` is introduced in this beta milestone.
 
 ## Bridge endpoints used now
 
@@ -47,8 +49,8 @@ This repository does **not** implement scraping, browser automation, reverse eng
 ## Build/setup
 
 ```bash
-python -m pip install -e .
-python -m bridge.main
+uv sync
+uv run suno-bridge
 ```
 
 JUCE (external):
@@ -58,12 +60,13 @@ cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUC
 cmake --build build/plugin_juce --target bridge_client
 cmake --build build/plugin_juce --target SunoStudioBridgeStandalone
 cmake --build build/plugin_juce --target SunoStudioBridgePlugin
+cmake --build build/plugin_juce --target BridgeContractVectors
 ```
 
 ## Tests
 
 ```bash
-pytest -q
+uv run pytest -q
 cmake --build build/plugin_juce --target BridgeContractVectors
 ./build/plugin_juce/BridgeContractVectors
 ```

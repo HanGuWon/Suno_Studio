@@ -17,8 +17,9 @@ Plugin and standalone now both host `BridgeClientSurface`, which exposes:
 - Submit text / import+submit audio
 - Provider mode and output-family selection
 - Manual handoff actions (`GET /jobs/{id}/handoff`)
-- Manual results import (`POST /jobs/{id}/manual-complete`)
+- Manual results import (`POST /jobs/{id}/manual-complete`) for requested + pending families only
 - Restart-safe reconnect using persisted `lastActiveJobId` + `GET /jobs/{id}` rehydration
+- Restore warnings surfaced in status text after reconnect
 - Reveal / drag-copy output path (preview currently disabled)
 
 ## Build
