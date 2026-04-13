@@ -17,12 +17,15 @@ The C++ client now directly supports the existing bridge contract:
 - fetch manual handoff package (`/jobs/{id}/handoff`)
 - import manual result files by family (`/jobs/{id}/manual-complete`)
 - render waiting states (`awaiting_manual_provider_submission`, `awaiting_manual_provider_result`, `importing_provider_result`)
+- surface reconnect restore warnings in shared UI status text instead of silently swallowing them
 
 ## Persistence additions
 
 State now includes provider mode, requested output families, handoff paths, last imported family map, mode/BPM/key/loop options, active job id, and selected output path.
 
 Persisted job state is treated as a pointer only: on reconnect the client re-fetches `GET /jobs/{id}` for `lastActiveJobId` and rehydrates active job data, outputs, manual waiting state, and handoff metadata when available.
+
+Manual import prompting is manifest-aware: when `requestedDeliverables` is present, the shared surface asks only for requested + not-yet-imported families and skips `/manual-complete` entirely if no files were selected.
 
 ## Preview semantics
 

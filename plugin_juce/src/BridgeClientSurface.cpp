@@ -29,6 +29,18 @@ juce::String requestedDeliverablesKey(RequestedOutputFamily family)
 
     return "mix";
 }
+juce::String requestedDeliverablesCamelKey(RequestedOutputFamily family)
+{
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return "mix";
+        case RequestedOutputFamily::Stems: return "stems";
+        case RequestedOutputFamily::TempoLockedStems: return "tempoLockedStems";
+        case RequestedOutputFamily::Midi: return "midi";
+    }
+
+    return "mix";
+}
 }
 
 BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surface)
@@ -262,6 +274,8 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
 
     if (error.isNotEmpty())
         lastUiError = error;
+    else
+        lastUiError.clear();
 
     refreshOutputList();
 }
@@ -289,14 +303,15 @@ bool BridgeClientSurface::hasImportedFamily(RequestedOutputFamily family) const
 
 bool BridgeClientSurface::isFamilyRequested(RequestedOutputFamily family) const
 {
-    if (controller.getState().requestedOutputs.contains(family))
-        return true;
-
     auto requested = controller.getActiveJob().outputManifest.getProperty("requestedDeliverables", juce::var());
-    if (! requested.isObject())
-        return false;
+    if (requested.isObject())
+    {
+        const auto snakeCase = static_cast<bool>(requested.getProperty(requestedDeliverablesKey(family), juce::var(false)));
+        const auto camelCase = static_cast<bool>(requested.getProperty(requestedDeliverablesCamelKey(family), juce::var(false)));
+        return snakeCase || camelCase;
+    }
 
-    return static_cast<bool>(requested.getProperty(requestedDeliverablesKey(family), juce::var(false)));
+    return controller.getState().requestedOutputs.contains(family);
 }
 
 bool BridgeClientSurface::shouldPromptForFamily(RequestedOutputFamily family) const

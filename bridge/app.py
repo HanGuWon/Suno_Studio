@@ -23,6 +23,7 @@ from storage.durable_storage import DurableStorage
 
 PROTOCOL_RANGE = ProtocolRange(min_supported="1.2", max_supported="1.3")
 PROVIDER_VERSION = "0.3.0"
+SUPPORTED_BETA_PROVIDER_MODES = (ProviderMode.MOCK_SUNO, ProviderMode.MANUAL_SUNO)
 
 
 class BridgeContext:
@@ -31,6 +32,31 @@ class BridgeContext:
         self.importer = importer
         self.jobs = jobs
         self.orchestrator = orchestrator
+
+
+def _parse_beta_provider_mode(raw_mode: str) -> ProviderMode:
+    supported = [mode.value for mode in SUPPORTED_BETA_PROVIDER_MODES]
+    try:
+        mode = ProviderMode(raw_mode)
+    except ValueError as exc:
+        raise BridgeError(
+            "INVALID_PROVIDER_MODE",
+            "Unsupported providerMode for this beta bridge.",
+            {"providerMode": raw_mode, "supported": supported},
+        ) from exc
+
+    if mode not in SUPPORTED_BETA_PROVIDER_MODES:
+        raise BridgeError(
+            "INVALID_PROVIDER_MODE",
+            "Unsupported providerMode for this beta bridge.",
+            {
+                "providerMode": raw_mode,
+                "supported": supported,
+                "futureScope": [ProviderMode.OFFICIAL_API.value, ProviderMode.WEB_SESSION.value],
+            },
+        )
+
+    return mode
 
 
 def create_app(
@@ -160,7 +186,7 @@ def create_app(
             prompt=payload.prompt,
             metadata=payload.metadata,
         )
-        provider_mode = ProviderMode(payload.providerMode)
+        provider_mode = _parse_beta_provider_mode(payload.providerMode)
         job, created = context.jobs.create_text_job(request, provider_mode=provider_mode)
         return JobCreateResponse(created=created, job=_job_to_response(job))
 
@@ -193,7 +219,7 @@ def create_app(
             prompt=prompt,
             metadata=json.loads(metadata),
         )
-        provider_mode = ProviderMode(providerMode)
+        provider_mode = _parse_beta_provider_mode(providerMode)
         job, created = context.jobs.create_audio_job(request, asset_id=local_asset_id, provider_mode=provider_mode)
         return JobCreateResponse(created=created, job=_job_to_response(job))
 

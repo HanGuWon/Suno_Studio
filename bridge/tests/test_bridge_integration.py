@@ -288,3 +288,33 @@ def test_mock_provider_regression_still_completes(tmp_path: Path):
         assert create.status_code == 200
         terminal = _wait_for_terminal(client, create.json()["job"]["id"])
         assert terminal["status"] == "complete"
+
+
+def test_beta_bridge_rejects_placeholder_provider_modes(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        response = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "placeholder", "providerMode": "official_api", "metadata": {}},
+            headers=_headers("bp1"),
+        )
+        assert response.status_code == 400
+        payload = response.json()["error"]
+        assert payload["code"] == "INVALID_PROVIDER_MODE"
+        assert payload["details"]["supported"] == ["mock_suno", "manual_suno"]
+        assert payload["details"]["futureScope"] == ["official_api", "web_session"]
+
+
+def test_beta_bridge_rejects_unknown_provider_modes(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        response = client.post(
+            "/jobs/text",
+            json={"clientRequestId": str(uuid4()), "prompt": "unknown", "providerMode": "totally_unknown", "metadata": {}},
+            headers=_headers("bp2"),
+        )
+        assert response.status_code == 400
+        payload = response.json()["error"]
+        assert payload["code"] == "INVALID_PROVIDER_MODE"
+        assert payload["details"]["providerMode"] == "totally_unknown"
+        assert payload["details"]["supported"] == ["mock_suno", "manual_suno"]
