@@ -204,7 +204,7 @@ def test_hmac_signed_requests_and_protocol_mismatch(tmp_path: Path):
             "X-Body-Sha256": sig.body_sha256,
             "X-Signature": sig.signature,
         }
-        ok = client.post("/jobs/text", data=raw, headers=headers)
+        ok = client.post("/jobs/text", content=raw, headers=headers)
         assert ok.status_code == 200
 
 

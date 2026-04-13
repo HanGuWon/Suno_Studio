@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import json
 import tempfile
 from pathlib import Path
@@ -81,7 +83,16 @@ def create_app(
     jobs = JobService(storage=storage, orchestrator=orchestrator)
 
     context = BridgeContext(storage=storage, importer=importer, jobs=jobs, orchestrator=orchestrator)
-    app = FastAPI(title="Suno Studio Bridge", version=PROVIDER_VERSION)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        context.orchestrator.start()
+        try:
+            yield
+        finally:
+            context.orchestrator.stop()
+
+    app = FastAPI(title="Suno Studio Bridge", version=PROVIDER_VERSION, lifespan=lifespan)
     app.state.ctx = context
 
     should_verify = enable_hmac if enable_hmac is not None else True
@@ -134,14 +145,6 @@ def create_app(
     async def bridge_error_handler(_, exc: BridgeError):
         status_code = 404 if exc.code.endswith("NOT_FOUND") else 400
         return JSONResponse(status_code=status_code, content=exc.to_payload())
-
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        context.orchestrator.start()
-
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
-        context.orchestrator.stop()
 
     @app.get("/capabilities")
     async def get_capabilities(
