@@ -26,6 +26,8 @@ The JUCE plugin and standalone now both expose the same shared client surface wi
 - restore warnings surfaced in the shared status text after reconnect
 - handoff actions (`Prepare/Fetch`, `Reveal`, `Open instructions`)
 - manual result import (`manual-complete` endpoint) for only requested + pending families, then reveal/drag/copy
+- local audio/MIDI file drops on the shared surface with a confirmable result-family selector
+- user-controlled Downloads folder scan/watch that stages new audio/MIDI files for the same confirmable import flow
 
 Preview is intentionally disabled for now across plugin + standalone until a full playback path is implemented.
 
@@ -56,12 +58,15 @@ uv run suno-bridge
 JUCE (external):
 
 ```bash
-cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
+cmake -S plugin_juce -B build/plugin_juce
 cmake --build build/plugin_juce --target bridge_client
 cmake --build build/plugin_juce --target SunoStudioBridgeStandalone
 cmake --build build/plugin_juce --target SunoStudioBridgePlugin
 cmake --build build/plugin_juce --target BridgeContractVectors
 ```
+
+Pass `-Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE` to use a local JUCE install.
+Without `juce_DIR`, CMake fetches the pinned JUCE tag automatically.
 
 ## Tests
 
@@ -80,3 +85,11 @@ python tools/make_fl_studio_smoke_assets.py
 ```
 
 Then follow `docs/fl_studio_drag_smoke_test.md`.
+
+FL Studio assisted staging:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File host_adapters/fl_studio/stage_for_playlist.ps1 -Path path\to\result.wav
+```
+
+See `docs/fl_studio_adapter.md`.

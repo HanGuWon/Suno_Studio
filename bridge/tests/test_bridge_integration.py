@@ -277,6 +277,50 @@ def test_manual_provider_audio_job_and_manual_complete(tmp_path: Path):
         assert body["outputManifest"]["importedDeliverables"]["midi"]
 
 
+def test_manual_complete_appends_later_result_families(tmp_path: Path):
+    app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
+    with TestClient(app) as client:
+        create = client.post(
+            "/jobs/text",
+            json={
+                "clientRequestId": str(uuid4()),
+                "prompt": "manual incremental",
+                "providerMode": "manual_suno",
+                "metadata": {"request_mix": True, "request_stems": True},
+            },
+            headers=_headers("mi1"),
+        )
+        assert create.status_code == 200
+        job_id = create.json()["job"]["id"]
+        for _ in range(20):
+            refreshed = client.get(f"/jobs/{job_id}", headers=_headers(str(uuid4()))).json()
+            if refreshed["status"] == "awaiting_manual_provider_result":
+                break
+            time.sleep(0.02)
+        assert refreshed["status"] == "awaiting_manual_provider_result"
+
+        first = client.post(
+            f"/jobs/{job_id}/manual-complete",
+            headers=_headers("mi2"),
+            files={"mixFiles": ("mix.wav", _wav_bytes(), "audio/wav")},
+        )
+        assert first.status_code == 200
+        assert first.json()["status"] == "complete"
+
+        second = client.post(
+            f"/jobs/{job_id}/manual-complete",
+            headers=_headers("mi3"),
+            files={"stemFiles": ("vocals.wav", _wav_bytes(), "audio/wav")},
+        )
+        assert second.status_code == 200
+        body = second.json()
+        imported = body["outputManifest"]["importedDeliverables"]
+        assert len(imported["mix"]) == 1
+        assert len(imported["stems"]) == 1
+        assert len(body["outputManifest"]["files"]) == 2
+        assert len(body["outputAssets"]) == 2
+
+
 def test_mock_provider_regression_still_completes(tmp_path: Path):
     app = create_app(db_path=tmp_path / "jobs.db", assets_root=tmp_path / "assets", enable_hmac=False)
     with TestClient(app) as client:

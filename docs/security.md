@@ -11,6 +11,10 @@
 
 For Suno integration in this phase, the project supports only **manual user actions** in official Suno UI.
 
+Local drag/drop and Downloads folder scan/watch are user-driven file transfer
+features. They operate only on local files visible to the user and stage files
+for explicit confirmation before import.
+
 Not implemented:
 - scraping/robots
 - browser automation

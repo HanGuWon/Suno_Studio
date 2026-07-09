@@ -18,9 +18,13 @@
 5. Run `Prepare / Fetch Handoff` and open/reveal workspace instructions.
 6. Generate and download files manually in Suno UI.
 7. Click `Import Suno Results`; the picker prompts only for requested + not-yet-imported families.
-8. You can cancel any family picker; the client skips `/manual-complete` unless at least one file was selected.
-9. Client calls `/jobs/{job_id}/manual-complete`, then selects the first available output for reveal/drag.
-10. Use the output selector to choose a different file, then reveal it or drag/copy it into the DAW.
+8. Or drop local Suno result files onto the surface.
+9. Or use `Scan Downloads` to stage existing audio/MIDI files from the local Downloads folder.
+10. Optionally enable `Watch Downloads` before downloading from Suno; new audio/MIDI files are staged in the same drop row.
+11. Confirm or change the result family (`mix`, `stems`, `tempo-locked stems`, `MIDI`), then use `Import Dropped`.
+12. You can cancel any family picker; the client skips `/manual-complete` unless at least one file was selected.
+13. Client calls `/jobs/{job_id}/manual-complete`, then selects the first available output for reveal/drag.
+14. Use the output selector to choose a different file, then reveal it or drag/copy it into the DAW.
 
 ## 3) REAPER assisted path
 

@@ -49,6 +49,87 @@ juce::String shortOutputName(const juce::File& file)
 
     return file.getFileName();
 }
+
+juce::String familyLabel(RequestedOutputFamily family)
+{
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return "mix";
+        case RequestedOutputFamily::Stems: return "stems";
+        case RequestedOutputFamily::TempoLockedStems: return "tempo-locked stems";
+        case RequestedOutputFamily::Midi: return "MIDI";
+    }
+
+    return "mix";
+}
+
+int familyComboId(RequestedOutputFamily family)
+{
+    switch (family)
+    {
+        case RequestedOutputFamily::Mix: return 1;
+        case RequestedOutputFamily::Stems: return 2;
+        case RequestedOutputFamily::TempoLockedStems: return 3;
+        case RequestedOutputFamily::Midi: return 4;
+    }
+
+    return 1;
+}
+
+RequestedOutputFamily familyFromComboId(int selectedId)
+{
+    switch (selectedId)
+    {
+        case 2: return RequestedOutputFamily::Stems;
+        case 3: return RequestedOutputFamily::TempoLockedStems;
+        case 4: return RequestedOutputFamily::Midi;
+        default: return RequestedOutputFamily::Mix;
+    }
+}
+
+bool isAudioExtension(const juce::File& file)
+{
+    const auto ext = file.getFileExtension().toLowerCase();
+    return ext == ".wav"
+        || ext == ".wave"
+        || ext == ".mp3"
+        || ext == ".aif"
+        || ext == ".aiff"
+        || ext == ".flac"
+        || ext == ".ogg"
+        || ext == ".m4a"
+        || ext == ".aac"
+        || ext == ".opus"
+        || ext == ".wma";
+}
+
+bool isMidiExtension(const juce::File& file)
+{
+    const auto ext = file.getFileExtension().toLowerCase();
+    return ext == ".mid" || ext == ".midi";
+}
+
+bool hasStemNameHint(const juce::String& lowerName)
+{
+    return lowerName.contains("stem")
+        || lowerName.contains("vocal")
+        || lowerName.contains("drum")
+        || lowerName.contains("bass")
+        || lowerName.contains("guitar")
+        || lowerName.contains("instrument")
+        || lowerName.contains("piano")
+        || lowerName.contains("synth")
+        || lowerName.contains("lead")
+        || lowerName.contains("backing")
+        || lowerName.contains("harmony");
+}
+
+bool hasTempoNameHint(const juce::String& lowerName)
+{
+    return lowerName.contains("tempo")
+        || lowerName.contains("locked")
+        || lowerName.contains("bpm");
+}
 }
 
 BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surface)
@@ -115,6 +196,32 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     configureButton(reveal, "Reveal Result");
     configureButton(drag, "Drag Selected Output");
 
+    dropFamily.addItem("mix", familyComboId(RequestedOutputFamily::Mix));
+    dropFamily.addItem("stems", familyComboId(RequestedOutputFamily::Stems));
+    dropFamily.addItem("tempo-locked stems", familyComboId(RequestedOutputFamily::TempoLockedStems));
+    dropFamily.addItem("MIDI", familyComboId(RequestedOutputFamily::Midi));
+    dropFamily.setSelectedId(familyComboId(pendingDropFamily));
+    dropFamily.onChange = [this]
+    {
+        pendingDropFamily = familyFromComboId(dropFamily.getSelectedId());
+        updateDropActions();
+    };
+    addAndMakeVisible(dropLabel);
+    addAndMakeVisible(dropFamily);
+    configureButton(importDropped, "Import Dropped");
+    configureButton(clearDropped, "Clear Dropped");
+
+    addAndMakeVisible(downloadWatchLabel);
+    configureButton(scanDownloads, "Scan Downloads");
+    watchDownloads.setButtonText("Watch Downloads");
+    watchDownloads.onClick = [this]
+    {
+        if (watchDownloads.getToggleState())
+            seedSeenDownloadFiles();
+        updateDownloadWatchStatus();
+    };
+    addAndMakeVisible(watchDownloads);
+
     addAndMakeVisible(outputLabel);
     addAndMakeVisible(outputs);
     outputs.onChange = [this]
@@ -131,6 +238,8 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
 
     updateControllerSettings();
     updateOutputActions();
+    updateDropActions();
+    updateDownloadWatchStatus();
     refreshStatus();
     startTimerHz(4);
 }
@@ -165,11 +274,13 @@ void BridgeClientSurface::refreshStatus()
 {
     auto job = controller.getActiveJob();
     auto provider = toApiString(controller.getState().providerMode);
-    auto stateText = controller.isConnected() ? "connected" : "disconnected";
+    juce::String stateText = controller.isConnected() ? "connected" : "disconnected";
     if (job.id.isNotEmpty())
         stateText << " | job=" << job.id << " | status=" << job.status << " | provider=" << provider;
     if (lastUiError.isNotEmpty())
         stateText << " | error=" << lastUiError;
+    if (externalFileDragActive)
+        stateText << " | file drop ready";
     statusLabel.setText("[" + surfaceName + "] " + stateText, juce::dontSendNotification);
 
     if (isManualWaitingState(job.status))
@@ -188,6 +299,7 @@ void BridgeClientSurface::refreshOutputList()
         outputs.addItem(file, i++);
     syncSelectedOutput();
     updateOutputActions();
+    updateDropActions();
     refreshStatus();
 }
 
@@ -233,6 +345,15 @@ void BridgeClientSurface::updateOutputActions()
     outputLabel.setText("Output: " + shortOutputName(selected), juce::dontSendNotification);
     reveal.setEnabled(hasOutput);
     drag.setEnabled(hasOutput);
+}
+
+void BridgeClientSurface::updateDropActions()
+{
+    dropLabel.setText(pendingDropSummary(), juce::dontSendNotification);
+    const auto hasDrop = ! pendingDropFiles.isEmpty();
+    dropFamily.setEnabled(hasDrop);
+    importDropped.setEnabled(hasDrop && hasPendingManualImport());
+    clearDropped.setEnabled(hasDrop);
 }
 
 void BridgeClientSurface::chooseAndAddFiles(juce::Array<juce::File>& target, const juce::String& title)
@@ -315,6 +436,21 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
         if (controller.manualCompleteActive(completion, error))
             lastUiError.clear();
     }
+    else if (b == &importDropped)
+    {
+        if (importPendingDroppedFiles(error))
+            lastUiError.clear();
+    }
+    else if (b == &clearDropped)
+    {
+        pendingDropFiles.clear();
+        updateDropActions();
+    }
+    else if (b == &scanDownloads)
+    {
+        if (scanDownloadsForResultFiles(true, error))
+            lastUiError.clear();
+    }
     else if (b == &reveal)
     {
         revealSelectedOutput(error);
@@ -330,6 +466,267 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
         lastUiError.clear();
 
     refreshOutputList();
+}
+
+bool BridgeClientSurface::hasPendingManualImport() const
+{
+    const auto& job = controller.getActiveJob();
+    if (job.id.isEmpty() || job.providerMode != ProviderMode::ManualSuno)
+        return false;
+    if (job.status != "awaiting_manual_provider_result"
+        && job.status != "importing_provider_result"
+        && job.status != "complete")
+        return false;
+
+    return shouldPromptForFamily(RequestedOutputFamily::Mix)
+        || shouldPromptForFamily(RequestedOutputFamily::Stems)
+        || shouldPromptForFamily(RequestedOutputFamily::TempoLockedStems)
+        || shouldPromptForFamily(RequestedOutputFamily::Midi);
+}
+
+bool BridgeClientSurface::isSupportedDropFile(const juce::File& file) const
+{
+    return file.existsAsFile() && (isAudioExtension(file) || isMidiExtension(file));
+}
+
+RequestedOutputFamily BridgeClientSurface::guessedDropFamily(const juce::Array<juce::File>& files) const
+{
+    auto firstPending = [this](RequestedOutputFamily preferred)
+    {
+        if (shouldPromptForFamily(preferred))
+            return preferred;
+        if (shouldPromptForFamily(RequestedOutputFamily::Mix))
+            return RequestedOutputFamily::Mix;
+        if (shouldPromptForFamily(RequestedOutputFamily::Stems))
+            return RequestedOutputFamily::Stems;
+        if (shouldPromptForFamily(RequestedOutputFamily::TempoLockedStems))
+            return RequestedOutputFamily::TempoLockedStems;
+        if (shouldPromptForFamily(RequestedOutputFamily::Midi))
+            return RequestedOutputFamily::Midi;
+        return preferred;
+    };
+
+    if (files.isEmpty())
+        return firstPending(RequestedOutputFamily::Mix);
+
+    bool allMidi = true;
+    bool anyTempoHint = false;
+    bool anyStemHint = false;
+    for (const auto& file : files)
+    {
+        allMidi = allMidi && isMidiExtension(file);
+        const auto lowerName = file.getFileNameWithoutExtension().toLowerCase();
+        anyTempoHint = anyTempoHint || hasTempoNameHint(lowerName);
+        anyStemHint = anyStemHint || hasStemNameHint(lowerName);
+    }
+
+    if (allMidi)
+        return firstPending(RequestedOutputFamily::Midi);
+    if (anyTempoHint)
+        return firstPending(RequestedOutputFamily::TempoLockedStems);
+    if (anyStemHint || files.size() > 1)
+        return firstPending(RequestedOutputFamily::Stems);
+    return firstPending(RequestedOutputFamily::Mix);
+}
+
+void BridgeClientSurface::captureDroppedFiles(const juce::Array<juce::File>& files)
+{
+    pendingDropFiles.clear();
+    for (const auto& file : files)
+        if (isSupportedDropFile(file))
+            pendingDropFiles.add(file);
+
+    pendingDropFamily = guessedDropFamily(pendingDropFiles);
+    dropFamily.setSelectedId(familyComboId(pendingDropFamily), juce::dontSendNotification);
+    updateDropActions();
+}
+
+juce::String BridgeClientSurface::pendingDropSummary() const
+{
+    if (pendingDropFiles.isEmpty())
+        return "Drop Suno result files here";
+
+    const auto first = pendingDropFiles.getFirst().getFileName();
+    juce::String summary = "Dropped " + juce::String(pendingDropFiles.size()) + " file";
+    if (pendingDropFiles.size() != 1)
+        summary << "s";
+    summary << " -> " << familyLabel(pendingDropFamily) << " | " << first;
+    if (pendingDropFiles.size() > 1)
+        summary << " +" << juce::String(pendingDropFiles.size() - 1);
+    return summary;
+}
+
+bool BridgeClientSurface::importPendingDroppedFiles(juce::String& errorOut)
+{
+    if (pendingDropFiles.isEmpty())
+    {
+        errorOut = "No dropped files waiting to import";
+        return false;
+    }
+    if (! hasPendingManualImport())
+    {
+        errorOut = "No active manual_suno job is waiting for result files";
+        return false;
+    }
+    if (! shouldPromptForFamily(pendingDropFamily))
+    {
+        errorOut = "Selected result family is not pending for this job";
+        return false;
+    }
+
+    ManualCompleteFiles completion;
+    switch (pendingDropFamily)
+    {
+        case RequestedOutputFamily::Mix:
+            completion.mixFiles = pendingDropFiles;
+            break;
+        case RequestedOutputFamily::Stems:
+            completion.stemFiles = pendingDropFiles;
+            break;
+        case RequestedOutputFamily::TempoLockedStems:
+            completion.tempoLockedStemFiles = pendingDropFiles;
+            break;
+        case RequestedOutputFamily::Midi:
+            completion.midiFiles = pendingDropFiles;
+            break;
+    }
+
+    if (! controller.manualCompleteActive(completion, errorOut))
+        return false;
+
+    pendingDropFiles.clear();
+    updateDropActions();
+    return true;
+}
+
+bool BridgeClientSurface::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (int i = 0; i < files.size(); ++i)
+        if (isSupportedDropFile(juce::File(files[i])))
+            return true;
+
+    return false;
+}
+
+void BridgeClientSurface::fileDragEnter(const juce::StringArray&, int, int)
+{
+    externalFileDragActive = true;
+    lastUiError.clear();
+    refreshStatus();
+}
+
+void BridgeClientSurface::fileDragExit(const juce::StringArray&)
+{
+    externalFileDragActive = false;
+    refreshStatus();
+}
+
+void BridgeClientSurface::filesDropped(const juce::StringArray& files, int, int)
+{
+    externalFileDragActive = false;
+    updateControllerSettings();
+
+    juce::Array<juce::File> droppedFiles;
+    for (int i = 0; i < files.size(); ++i)
+    {
+        juce::File file(files[i]);
+        if (isSupportedDropFile(file))
+            droppedFiles.add(file);
+    }
+
+    juce::String error;
+    if (droppedFiles.isEmpty())
+    {
+        error = "Drop a local audio or MIDI file.";
+    }
+    else if (hasPendingManualImport())
+    {
+        captureDroppedFiles(droppedFiles);
+    }
+    else if (droppedFiles.size() == 1 && isAudioExtension(droppedFiles.getFirst()))
+    {
+        if (controller.importAndSubmitAudio(droppedFiles.getFirst(), prompt.getText(), error))
+            lastUiError.clear();
+    }
+    else
+    {
+        error = "Drop one audio file for an audio prompt, or use an active manual_suno job for result files.";
+    }
+
+    if (error.isNotEmpty())
+        lastUiError = error;
+
+    refreshOutputList();
+}
+
+juce::File BridgeClientSurface::downloadsFolder() const
+{
+    return juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile("Downloads");
+}
+
+juce::Array<juce::File> BridgeClientSurface::collectDownloadCandidates(bool includeSeen)
+{
+    juce::Array<juce::File> candidates;
+    const auto folder = downloadsFolder();
+    if (! folder.isDirectory())
+        return candidates;
+
+    auto files = folder.findChildFiles(juce::File::findFiles, false, "*");
+    for (const auto& file : files)
+    {
+        if (! isSupportedDropFile(file))
+            continue;
+
+        const auto path = file.getFullPathName();
+        if (includeSeen || ! seenDownloadPaths.contains(path))
+            candidates.add(file);
+        seenDownloadPaths.addIfNotAlreadyThere(path);
+    }
+
+    return candidates;
+}
+
+void BridgeClientSurface::seedSeenDownloadFiles()
+{
+    collectDownloadCandidates(true);
+}
+
+bool BridgeClientSurface::scanDownloadsForResultFiles(bool includeSeen, juce::String& errorOut)
+{
+    if (! hasPendingManualImport())
+    {
+        errorOut = "No active manual_suno job is waiting for result files";
+        return false;
+    }
+    if (! downloadsFolder().isDirectory())
+    {
+        errorOut = "Downloads folder is not available";
+        return false;
+    }
+
+    auto candidates = collectDownloadCandidates(includeSeen);
+    if (candidates.isEmpty())
+    {
+        errorOut = includeSeen ? "No audio or MIDI files found in Downloads" : "";
+        updateDownloadWatchStatus();
+        return false;
+    }
+
+    captureDroppedFiles(candidates);
+    updateDownloadWatchStatus();
+    return true;
+}
+
+void BridgeClientSurface::updateDownloadWatchStatus()
+{
+    juce::String text = "Downloads: ";
+    if (! downloadsFolder().isDirectory())
+        text << "not found";
+    else
+        text << downloadsFolder().getFullPathName();
+    if (watchDownloads.getToggleState())
+        text << " | watching";
+    downloadWatchLabel.setText(text, juce::dontSendNotification);
 }
 
 bool BridgeClientSurface::revealSelectedOutput(juce::String& errorOut)
@@ -364,6 +761,19 @@ void BridgeClientSurface::timerCallback()
     juce::String error;
     if (! controller.pollActive(error) && error.isNotEmpty())
         lastUiError = "Poll error: " + error;
+
+    if (watchDownloads.getToggleState())
+    {
+        ++downloadWatchTick;
+        if (downloadWatchTick >= 16)
+        {
+            downloadWatchTick = 0;
+            juce::String watchError;
+            if (pendingDropFiles.isEmpty() && hasPendingManualImport())
+                scanDownloadsForResultFiles(false, watchError);
+        }
+    }
+
     refreshOutputList();
 }
 
@@ -445,6 +855,17 @@ void BridgeClientSurface::resized()
     revealHandoff.setBounds(row2.removeFromLeft(160));
     openInstructions.setBounds(row2.removeFromLeft(180));
     importResults.setBounds(row2.removeFromLeft(160));
+
+    auto dropRow = area.removeFromTop(28);
+    dropLabel.setBounds(dropRow.removeFromLeft(300));
+    dropFamily.setBounds(dropRow.removeFromLeft(160));
+    importDropped.setBounds(dropRow.removeFromLeft(140));
+    clearDropped.setBounds(dropRow.removeFromLeft(130));
+
+    auto downloadRow = area.removeFromTop(28);
+    downloadWatchLabel.setBounds(downloadRow.removeFromLeft(360));
+    scanDownloads.setBounds(downloadRow.removeFromLeft(150));
+    watchDownloads.setBounds(downloadRow.removeFromLeft(170));
 
     auto row3 = area.removeFromTop(28);
     preview.setBounds(row3.removeFromLeft(130));

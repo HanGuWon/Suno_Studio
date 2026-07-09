@@ -40,7 +40,14 @@ cmake --build build/plugin_juce --target SunoStudioBridgePlugin
 4. Select `manual_suno`, request `mix`, `stems`, `tempo-locked stems`, and `MIDI`.
 5. Submit a text job and wait for `awaiting_manual_provider_result`.
 6. Drop the generated smoke files onto the client surface.
-7. Confirm the job completes and output paths appear in the result selector.
+7. Confirm the drop row shows the inferred family.
+8. Change the family selector if needed, then use `Import Dropped`.
+9. Confirm the job completes and output paths appear in the result selector.
+
+To test Downloads scanning, copy one smoke file into the system Downloads folder,
+then use `Scan Downloads`. To test passive watching, enable `Watch Downloads`
+before copying the file; the file should appear in the drop row on the next scan
+cycle.
 
 Expected family routing:
 
@@ -56,6 +63,17 @@ Expected family routing:
 3. Use `Drag Selected Output`.
 4. Drop into the FL Studio Playlist.
 5. Confirm the clip lands on a Playlist track and the clipboard path still points to the same file.
+
+## Test assisted staging
+
+```powershell
+powershell -ExecutionPolicy Bypass -File host_adapters/fl_studio/stage_for_playlist.ps1 `
+  -Path build/fl_studio_smoke_assets/suno_mix_smoke.wav `
+  -StageRoot build/fl_studio_stage_test
+```
+
+Confirm the script returns JSON with `stagedFiles`, and then drag or paste the
+staged file path from the clipboard into FL Studio.
 
 ## Record result
 

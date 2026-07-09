@@ -11,4 +11,4 @@ This matrix captures transport/edit interoperability across common host integrat
 | Studio One | 6.6+ | WAV | Tempo, arranger sections, song position | ✅ | ✅ | ✅ | ✅ | High reliability; occasional duplicate insert if drop occurs during playback. |
 | Ableton Live | 12.x | WAV | Tempo, global quantization, song time | ❌ | ❌ | ❌ | ❌ | Drag to Session View clips is reliable; Arrangement drop may offset if warp is enabled. |
 | Reaper | 7.x | WAV/FLAC | Tempo map, project sample rate, play state | ✅ | ✅ | ❌ | ❌ | Reliable drag to arrange view; drag to razor-edited lane can target wrong take if lane is collapsed. |
-| FL Studio | 21.x | WAV/MP3 | Tempo, song/pattern mode, PPQ | ❌ | ❌ | ❌ | ❌ | Drag works into Playlist and Sampler; edge drops near playlist bounds can be ignored. |
+| FL Studio | 21.x/2025 | WAV/MP3/MIDI | Tempo, song/pattern mode, PPQ | ❌ | ❌ | Assisted staging | ❌ | Drag works into Playlist and Sampler; edge drops near playlist bounds can be ignored. Staging helper copies files into the FL Studio user data tree and clipboard. |
