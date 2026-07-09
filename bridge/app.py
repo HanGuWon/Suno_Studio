@@ -272,12 +272,24 @@ def create_app(
             raise BridgeError("JOB_NOT_FOUND", f"Job {job_id} not found", {})
         if job.provider_mode is not ProviderMode.MANUAL_SUNO:
             raise BridgeError("INVALID_PROVIDER_MODE", "manual-complete only supported for manual_suno jobs.", {})
+        if job.status not in {
+            JobStatus.AWAITING_MANUAL_PROVIDER_RESULT,
+            JobStatus.IMPORTING_PROVIDER_RESULT,
+            JobStatus.COMPLETE,
+        }:
+            raise BridgeError(
+                "INVALID_JOB_STATUS",
+                "Manual result import is only available after the manual handoff is ready.",
+                {"status": job.status.value},
+            )
 
         all_files = {"mix": mixFiles, "stems": stemFiles, "tempo_locked_stems": tempoLockedStemFiles, "midi": midiFiles}
         if not any(all_files.values()):
             raise BridgeError("NO_FILES", "Provide at least one imported manual result file.", {})
 
-        context.storage.set_job_status(job_id, JobStatus.IMPORTING_PROVIDER_RESULT, progress=0.85)
+        if job.status is not JobStatus.COMPLETE:
+            context.storage.set_job_status(job_id, JobStatus.IMPORTING_PROVIDER_RESULT, progress=0.85)
+
         imported_files: list[dict[str, str]] = []
         output_assets: list[str] = []
         for family, files in all_files.items():
@@ -298,19 +310,33 @@ def create_app(
                 imported_files.append({"family": family, "path": str(path), "name": upload.filename or path.name})
                 output_assets.append(str(path))
 
-        requested = (job.provider_metadata.get("handoff") or {}).get("handoff", {}).get("requested_deliverables", {})
+        existing_manifest = job.output_manifest_json or {}
+        requested = existing_manifest.get("requestedDeliverables") or (job.provider_metadata.get("handoff") or {}).get("handoff", {}).get("requested_deliverables", {})
+        existing_imported = existing_manifest.get("importedDeliverables") or {}
+        existing_files = existing_manifest.get("files") or []
+        imported_by_family = {
+            "mix": [f for f in imported_files if f["family"] == "mix"],
+            "stems": [f for f in imported_files if f["family"] == "stems"],
+            "tempoLockedStems": [f for f in imported_files if f["family"] == "tempo_locked_stems"],
+            "midi": [f for f in imported_files if f["family"] == "midi"],
+        }
+        merged_assets = list(job.output_assets)
+        for asset in output_assets:
+            if asset not in merged_assets:
+                merged_assets.append(asset)
+
         manifest = {
             "providerMode": job.provider_mode.value,
             "requestedDeliverables": requested,
             "importedDeliverables": {
-                "mix": [f for f in imported_files if f["family"] == "mix"],
-                "stems": [f for f in imported_files if f["family"] == "stems"],
-                "tempoLockedStems": [f for f in imported_files if f["family"] == "tempo_locked_stems"],
-                "midi": [f for f in imported_files if f["family"] == "midi"],
+                "mix": list(existing_imported.get("mix") or []) + imported_by_family["mix"],
+                "stems": list(existing_imported.get("stems") or []) + imported_by_family["stems"],
+                "tempoLockedStems": list(existing_imported.get("tempoLockedStems") or []) + imported_by_family["tempoLockedStems"],
+                "midi": list(existing_imported.get("midi") or []) + imported_by_family["midi"],
             },
-            "files": imported_files,
+            "files": list(existing_files) + imported_files,
         }
-        context.storage.attach_job_artifacts(job_id, output_manifest=manifest, output_assets=output_assets)
+        context.storage.attach_job_artifacts(job_id, output_manifest=manifest, output_assets=merged_assets)
         completed = context.storage.set_job_status(job_id, JobStatus.COMPLETE, progress=1.0, last_error=None)
         return _job_to_response(completed)
 

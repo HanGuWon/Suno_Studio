@@ -40,7 +40,9 @@ cmake --build build/plugin_juce --target SunoStudioBridgePlugin
 4. Select `manual_suno`, request `mix`, `stems`, `tempo-locked stems`, and `MIDI`.
 5. Submit a text job and wait for `awaiting_manual_provider_result`.
 6. Drop the generated smoke files onto the client surface.
-7. Confirm the job completes and output paths appear in the result selector.
+7. Confirm the drop row shows the inferred family.
+8. Change the family selector if needed, then use `Import Dropped`.
+9. Confirm the job completes and output paths appear in the result selector.
 
 Expected family routing:
 

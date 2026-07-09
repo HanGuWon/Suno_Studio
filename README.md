@@ -26,6 +26,7 @@ The JUCE plugin and standalone now both expose the same shared client surface wi
 - restore warnings surfaced in the shared status text after reconnect
 - handoff actions (`Prepare/Fetch`, `Reveal`, `Open instructions`)
 - manual result import (`manual-complete` endpoint) for only requested + pending families, then reveal/drag/copy
+- local audio/MIDI file drops on the shared surface with a confirmable result-family selector
 
 Preview is intentionally disabled for now across plugin + standalone until a full playback path is implemented.
 
