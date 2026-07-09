@@ -82,3 +82,11 @@ python tools/make_fl_studio_smoke_assets.py
 ```
 
 Then follow `docs/fl_studio_drag_smoke_test.md`.
+
+FL Studio assisted staging:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File host_adapters/fl_studio/stage_for_playlist.ps1 -Path path\to\result.wav
+```
+
+See `docs/fl_studio_adapter.md`.

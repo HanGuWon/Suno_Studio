@@ -64,6 +64,17 @@ Expected family routing:
 4. Drop into the FL Studio Playlist.
 5. Confirm the clip lands on a Playlist track and the clipboard path still points to the same file.
 
+## Test assisted staging
+
+```powershell
+powershell -ExecutionPolicy Bypass -File host_adapters/fl_studio/stage_for_playlist.ps1 `
+  -Path build/fl_studio_smoke_assets/suno_mix_smoke.wav `
+  -StageRoot build/fl_studio_stage_test
+```
+
+Confirm the script returns JSON with `stagedFiles`, and then drag or paste the
+staged file path from the clipboard into FL Studio.
+
 ## Record result
 
 Capture:
