@@ -9,6 +9,8 @@ void SunoStudioBridgeProcessor::prepareToPlay(double, int) {}
 void SunoStudioBridgeProcessor::releaseResources() {}
 bool SunoStudioBridgeProcessor::isBusesLayoutSupported(const BusesLayout&) const { return true; }
 void SunoStudioBridgeProcessor::processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) {}
+bool SunoStudioBridgeProcessor::acceptsMidi() const { return false; }
+bool SunoStudioBridgeProcessor::producesMidi() const { return false; }
 
 juce::AudioProcessorEditor* SunoStudioBridgeProcessor::createEditor()
 {

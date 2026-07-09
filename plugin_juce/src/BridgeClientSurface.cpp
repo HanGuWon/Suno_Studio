@@ -274,7 +274,7 @@ void BridgeClientSurface::refreshStatus()
 {
     auto job = controller.getActiveJob();
     auto provider = toApiString(controller.getState().providerMode);
-    auto stateText = controller.isConnected() ? "connected" : "disconnected";
+    juce::String stateText = controller.isConnected() ? "connected" : "disconnected";
     if (job.id.isNotEmpty())
         stateText << " | job=" << job.id << " | status=" << job.status << " | provider=" << provider;
     if (lastUiError.isNotEmpty())

@@ -58,12 +58,15 @@ uv run suno-bridge
 JUCE (external):
 
 ```bash
-cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
+cmake -S plugin_juce -B build/plugin_juce
 cmake --build build/plugin_juce --target bridge_client
 cmake --build build/plugin_juce --target SunoStudioBridgeStandalone
 cmake --build build/plugin_juce --target SunoStudioBridgePlugin
 cmake --build build/plugin_juce --target BridgeContractVectors
 ```
+
+Pass `-Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE` to use a local JUCE install.
+Without `juce_DIR`, CMake fetches the pinned JUCE tag automatically.
 
 ## Tests
 

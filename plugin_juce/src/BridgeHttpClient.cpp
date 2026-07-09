@@ -1,5 +1,8 @@
 #include "BridgeHttpClient.h"
 
+#include <juce_cryptography/juce_cryptography.h>
+#include <cstring>
+
 namespace suno::bridge
 {
 namespace
@@ -18,9 +21,7 @@ juce::String sha256Hex(const void* data, size_t size)
 juce::MemoryBlock sha256Raw(const void* data, size_t size)
 {
     juce::SHA256 digest(data, size);
-    juce::MemoryBlock out;
-    out.append(digest.getRawData(), 32);
-    return out;
+    return digest.getRawData();
 }
 
 juce::String hmacSha256Hex(const juce::String& key, const juce::String& message)
@@ -33,8 +34,11 @@ juce::String hmacSha256Hex(const juce::String& key, const juce::String& message)
         keyBlock = sha256Raw(keyBlock.getData(), keyBlock.getSize());
 
     if (keyBlock.getSize() < blockSize)
-        keyBlock.append(juce::String::repeatedString("\0", static_cast<int>(blockSize - keyBlock.getSize())).toRawUTF8(),
-                        blockSize - keyBlock.getSize());
+    {
+        juce::HeapBlock<uint8_t> zeros(blockSize - keyBlock.getSize());
+        std::memset(zeros.get(), 0, blockSize - keyBlock.getSize());
+        keyBlock.append(zeros.get(), blockSize - keyBlock.getSize());
+    }
 
     juce::MemoryBlock oKeyPad, iKeyPad;
     oKeyPad.setSize(blockSize);
@@ -76,7 +80,8 @@ void appendFilePart(juce::MemoryBlock& body,
                     const juce::File& file,
                     const juce::String& mimeType)
 {
-    auto data = file.loadFileAsData();
+    juce::MemoryBlock data;
+    file.loadFileAsData(data);
     appendString(body, "--" + boundary + "\r\n");
     appendString(body, "Content-Disposition: form-data; name=" + quote(field) + "; filename=" + quote(file.getFileName()) + "\r\n");
     appendString(body, "Content-Type: " + mimeType + "\r\n\r\n");
@@ -357,7 +362,7 @@ bool BridgeHttpClient::executeRequest(const juce::String& method,
     juce::StringArray headers;
     const auto requestId = makeRequestId();
     const auto nonce = makeRequestId();
-    const auto timestamp = juce::String(static_cast<int64>(juce::Time::getCurrentTime().toMilliseconds() / 1000));
+    const auto timestamp = juce::String(static_cast<juce::int64>(juce::Time::getCurrentTime().toMilliseconds() / 1000));
     const auto bodyHash = sha256Hex(bodyData, bodySize);
     const auto signature = buildSignature(timestamp, nonce, bodyHash);
 
@@ -372,14 +377,16 @@ bool BridgeHttpClient::executeRequest(const juce::String& method,
 
     int statusCode = 0;
     auto endpoint = juce::URL(buildBaseUrl() + path);
+    if (bodyData != nullptr && bodySize > 0)
+        endpoint = endpoint.withPOSTData(juce::MemoryBlock(bodyData, bodySize));
+
     auto stream = endpoint.createInputStream(
         juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
             .withExtraHeaders(headers.joinIntoString("\n"))
             .withHttpRequestCmd(method)
             .withConnectionTimeoutMs(8000)
             .withStatusCode(&statusCode)
-            .withNumRedirectsToFollow(2)
-            .withPOSTData(bodyData, bodySize));
+            .withNumRedirectsToFollow(2));
 
     if (stream == nullptr)
     {

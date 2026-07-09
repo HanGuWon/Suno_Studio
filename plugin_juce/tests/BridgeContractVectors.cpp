@@ -1,4 +1,5 @@
 #include <juce_core/juce_core.h>
+#include <juce_cryptography/juce_cryptography.h>
 #include <cstring>
 
 #include "BridgeModels.h"
@@ -37,9 +38,7 @@ juce::String sha256Hex(const void* data, size_t size)
 juce::MemoryBlock sha256Raw(const void* data, size_t size)
 {
     juce::SHA256 digest(data, size);
-    juce::MemoryBlock out;
-    out.append(digest.getRawData(), 32);
-    return out;
+    return digest.getRawData();
 }
 
 juce::String hmacSha256Hex(const juce::String& key, const juce::String& message)

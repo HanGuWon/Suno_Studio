@@ -25,12 +25,19 @@ Plugin and standalone now both host `BridgeClientSurface`, which exposes:
 ## Build
 
 ```bash
-cmake -S plugin_juce -B build/plugin_juce -Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE
+cmake -S plugin_juce -B build/plugin_juce
 cmake --build build/plugin_juce --target bridge_client
 cmake --build build/plugin_juce --target SunoStudioBridgeStandalone
 cmake --build build/plugin_juce --target SunoStudioBridgePlugin
 cmake --build build/plugin_juce --target BridgeContractVectors
 ```
+
+If JUCE is already installed, pass `-Djuce_DIR=/path/to/JUCE/lib/cmake/JUCE`.
+Otherwise CMake fetches the pinned JUCE tag from GitHub. Use
+`-DSUNO_STUDIO_FETCH_JUCE=OFF` to require a local JUCE package.
+
+On Windows, run CMake from a Visual Studio x64 developer shell or call
+`vcvars64.bat` before configuring with Ninja.
 
 ## Scope limits
 
