@@ -41,6 +41,14 @@ juce::String requestedDeliverablesCamelKey(RequestedOutputFamily family)
 
     return "mix";
 }
+
+juce::String shortOutputName(const juce::File& file)
+{
+    if (! file.existsAsFile())
+        return "No output selected";
+
+    return file.getFileName();
+}
 }
 
 BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surface)
@@ -105,8 +113,9 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     configureButton(preview, "Preview Unavailable");
     preview.setEnabled(false);
     configureButton(reveal, "Reveal Result");
-    configureButton(drag, "Drag / copy result path");
+    configureButton(drag, "Drag Selected Output");
 
+    addAndMakeVisible(outputLabel);
     addAndMakeVisible(outputs);
     outputs.onChange = [this]
     {
@@ -114,12 +123,14 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
             return;
         selected = juce::File(outputs.getItemText(outputs.getSelectedItemIndex()));
         controller.selectOutputFile(selected.getFullPathName());
+        updateOutputActions();
     };
 
     if (controller.getState().lastSelectedOutputPath.isNotEmpty())
         selected = juce::File(controller.getState().lastSelectedOutputPath);
 
     updateControllerSettings();
+    updateOutputActions();
     refreshStatus();
     startTimerHz(4);
 }
@@ -175,7 +186,53 @@ void BridgeClientSurface::refreshOutputList()
     int i = 1;
     for (const auto& file : controller.getOutputFiles())
         outputs.addItem(file, i++);
+    syncSelectedOutput();
+    updateOutputActions();
     refreshStatus();
+}
+
+void BridgeClientSurface::syncSelectedOutput()
+{
+    const auto& files = controller.getOutputFiles();
+    if (files.isEmpty())
+    {
+        selected = {};
+        outputs.setSelectedId(0, juce::dontSendNotification);
+        return;
+    }
+
+    auto desired = selected.existsAsFile() ? selected : juce::File(controller.getState().lastSelectedOutputPath);
+    if (! desired.existsAsFile())
+        desired = juce::File(files[0]);
+
+    int selectedId = 0;
+    for (int i = 0; i < files.size(); ++i)
+    {
+        if (juce::File(files[i]) == desired)
+        {
+            selectedId = i + 1;
+            break;
+        }
+    }
+
+    if (selectedId == 0)
+    {
+        desired = juce::File(files[0]);
+        selectedId = 1;
+    }
+
+    selected = desired;
+    outputs.setSelectedId(selectedId, juce::dontSendNotification);
+    if (controller.getState().lastSelectedOutputPath != selected.getFullPathName())
+        controller.selectOutputFile(selected.getFullPathName());
+}
+
+void BridgeClientSurface::updateOutputActions()
+{
+    const auto hasOutput = selected.existsAsFile();
+    outputLabel.setText("Output: " + shortOutputName(selected), juce::dontSendNotification);
+    reveal.setEnabled(hasOutput);
+    drag.setEnabled(hasOutput);
 }
 
 void BridgeClientSurface::chooseAndAddFiles(juce::Array<juce::File>& target, const juce::String& title)
@@ -260,16 +317,11 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
     }
     else if (b == &reveal)
     {
-        if (selected.existsAsFile())
-            selected.revealToUser();
+        revealSelectedOutput(error);
     }
     else if (b == &drag)
     {
-        if (selected.existsAsFile())
-        {
-            performExternalDragDropOfFiles({ selected.getFullPathName() }, false);
-            juce::SystemClipboard::copyTextToClipboard(selected.getFullPathName());
-        }
+        dragSelectedOutputToDaw(error);
     }
 
     if (error.isNotEmpty())
@@ -278,6 +330,33 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
         lastUiError.clear();
 
     refreshOutputList();
+}
+
+bool BridgeClientSurface::revealSelectedOutput(juce::String& errorOut)
+{
+    syncSelectedOutput();
+    if (! selected.existsAsFile())
+    {
+        errorOut = "No completed output file selected";
+        return false;
+    }
+
+    selected.revealToUser();
+    return true;
+}
+
+bool BridgeClientSurface::dragSelectedOutputToDaw(juce::String& errorOut)
+{
+    syncSelectedOutput();
+    if (! selected.existsAsFile())
+    {
+        errorOut = "No completed output file selected";
+        return false;
+    }
+
+    performExternalDragDropOfFiles({ selected.getFullPathName() }, false);
+    juce::SystemClipboard::copyTextToClipboard(selected.getFullPathName());
+    return true;
 }
 
 void BridgeClientSurface::timerCallback()
@@ -372,6 +451,7 @@ void BridgeClientSurface::resized()
     reveal.setBounds(row3.removeFromLeft(120));
     drag.setBounds(row3.removeFromLeft(190));
 
+    outputLabel.setBounds(area.removeFromTop(22));
     outputs.setBounds(area);
 }
 } // namespace suno::bridge
