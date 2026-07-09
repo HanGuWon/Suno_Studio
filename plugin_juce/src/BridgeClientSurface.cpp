@@ -211,6 +211,17 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     configureButton(importDropped, "Import Dropped");
     configureButton(clearDropped, "Clear Dropped");
 
+    addAndMakeVisible(downloadWatchLabel);
+    configureButton(scanDownloads, "Scan Downloads");
+    watchDownloads.setButtonText("Watch Downloads");
+    watchDownloads.onClick = [this]
+    {
+        if (watchDownloads.getToggleState())
+            seedSeenDownloadFiles();
+        updateDownloadWatchStatus();
+    };
+    addAndMakeVisible(watchDownloads);
+
     addAndMakeVisible(outputLabel);
     addAndMakeVisible(outputs);
     outputs.onChange = [this]
@@ -228,6 +239,7 @@ BridgeClientSurface::BridgeClientSurface(juce::File stateFile, juce::String surf
     updateControllerSettings();
     updateOutputActions();
     updateDropActions();
+    updateDownloadWatchStatus();
     refreshStatus();
     startTimerHz(4);
 }
@@ -433,6 +445,11 @@ void BridgeClientSurface::buttonClicked(juce::Button* b)
     {
         pendingDropFiles.clear();
         updateDropActions();
+    }
+    else if (b == &scanDownloads)
+    {
+        if (scanDownloadsForResultFiles(true, error))
+            lastUiError.clear();
     }
     else if (b == &reveal)
     {
@@ -642,6 +659,76 @@ void BridgeClientSurface::filesDropped(const juce::StringArray& files, int, int)
     refreshOutputList();
 }
 
+juce::File BridgeClientSurface::downloadsFolder() const
+{
+    return juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile("Downloads");
+}
+
+juce::Array<juce::File> BridgeClientSurface::collectDownloadCandidates(bool includeSeen)
+{
+    juce::Array<juce::File> candidates;
+    const auto folder = downloadsFolder();
+    if (! folder.isDirectory())
+        return candidates;
+
+    auto files = folder.findChildFiles(juce::File::findFiles, false, "*");
+    for (const auto& file : files)
+    {
+        if (! isSupportedDropFile(file))
+            continue;
+
+        const auto path = file.getFullPathName();
+        if (includeSeen || ! seenDownloadPaths.contains(path))
+            candidates.add(file);
+        seenDownloadPaths.addIfNotAlreadyThere(path);
+    }
+
+    return candidates;
+}
+
+void BridgeClientSurface::seedSeenDownloadFiles()
+{
+    collectDownloadCandidates(true);
+}
+
+bool BridgeClientSurface::scanDownloadsForResultFiles(bool includeSeen, juce::String& errorOut)
+{
+    if (! hasPendingManualImport())
+    {
+        errorOut = "No active manual_suno job is waiting for result files";
+        return false;
+    }
+    if (! downloadsFolder().isDirectory())
+    {
+        errorOut = "Downloads folder is not available";
+        return false;
+    }
+
+    auto candidates = collectDownloadCandidates(includeSeen);
+    if (candidates.isEmpty())
+    {
+        errorOut = includeSeen ? "No audio or MIDI files found in Downloads" : "";
+        updateDownloadWatchStatus();
+        return false;
+    }
+
+    captureDroppedFiles(candidates);
+    updateDownloadWatchStatus();
+    return true;
+}
+
+void BridgeClientSurface::updateDownloadWatchStatus()
+{
+    juce::String text = "Downloads: ";
+    if (! downloadsFolder().isDirectory())
+        text << "not found";
+    else
+        text << downloadsFolder().getFullPathName();
+    if (watchDownloads.getToggleState())
+        text << " | watching";
+    downloadWatchLabel.setText(text, juce::dontSendNotification);
+}
+
 bool BridgeClientSurface::revealSelectedOutput(juce::String& errorOut)
 {
     syncSelectedOutput();
@@ -674,6 +761,19 @@ void BridgeClientSurface::timerCallback()
     juce::String error;
     if (! controller.pollActive(error) && error.isNotEmpty())
         lastUiError = "Poll error: " + error;
+
+    if (watchDownloads.getToggleState())
+    {
+        ++downloadWatchTick;
+        if (downloadWatchTick >= 16)
+        {
+            downloadWatchTick = 0;
+            juce::String watchError;
+            if (pendingDropFiles.isEmpty() && hasPendingManualImport())
+                scanDownloadsForResultFiles(false, watchError);
+        }
+    }
+
     refreshOutputList();
 }
 
@@ -761,6 +861,11 @@ void BridgeClientSurface::resized()
     dropFamily.setBounds(dropRow.removeFromLeft(160));
     importDropped.setBounds(dropRow.removeFromLeft(140));
     clearDropped.setBounds(dropRow.removeFromLeft(130));
+
+    auto downloadRow = area.removeFromTop(28);
+    downloadWatchLabel.setBounds(downloadRow.removeFromLeft(360));
+    scanDownloads.setBounds(downloadRow.removeFromLeft(150));
+    watchDownloads.setBounds(downloadRow.removeFromLeft(170));
 
     auto row3 = area.removeFromTop(28);
     preview.setBounds(row3.removeFromLeft(130));

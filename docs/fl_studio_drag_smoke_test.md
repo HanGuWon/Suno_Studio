@@ -44,6 +44,11 @@ cmake --build build/plugin_juce --target SunoStudioBridgePlugin
 8. Change the family selector if needed, then use `Import Dropped`.
 9. Confirm the job completes and output paths appear in the result selector.
 
+To test Downloads scanning, copy one smoke file into the system Downloads folder,
+then use `Scan Downloads`. To test passive watching, enable `Watch Downloads`
+before copying the file; the file should appear in the drop row on the next scan
+cycle.
+
 Expected family routing:
 
 - `suno_mix_smoke.wav` -> mix

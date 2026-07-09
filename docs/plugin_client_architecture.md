@@ -42,6 +42,19 @@ This supports one-family-at-a-time correction while keeping the transfer user-dr
 The bridge also appends later manual-complete imports to the existing manifest so
 users can import mix, stems, tempo-locked stems, and MIDI in separate passes.
 
+## Downloads scan/watch
+
+The shared surface can scan the user's local `Downloads` folder for audio/MIDI
+files and stage matches through the same drop intake row. `Scan Downloads`
+includes existing files; `Watch Downloads` seeds the current folder contents and
+then periodically stages only newly observed files while the client is open.
+
+The watcher is deliberately local and passive:
+
+- it does not control a browser
+- it does not read Suno sessions or cookies
+- it does not upload until the user confirms the staged family with `Import Dropped`
+
 ## Preview semantics
 
 Preview is explicitly disabled in the shared JUCE surface for this milestone. The UI keeps reveal/drag-copy actions only, and does not claim plugin-editor playback support without a real host-safe playback path.

@@ -39,6 +39,11 @@ private:
     void updateDropActions();
     juce::String pendingDropSummary() const;
     bool importPendingDroppedFiles(juce::String& errorOut);
+    juce::File downloadsFolder() const;
+    juce::Array<juce::File> collectDownloadCandidates(bool includeSeen);
+    void seedSeenDownloadFiles();
+    bool scanDownloadsForResultFiles(bool includeSeen, juce::String& errorOut);
+    void updateDownloadWatchStatus();
 
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
@@ -82,6 +87,9 @@ private:
     juce::ComboBox dropFamily;
     juce::TextButton importDropped;
     juce::TextButton clearDropped;
+    juce::Label downloadWatchLabel;
+    juce::TextButton scanDownloads;
+    juce::ToggleButton watchDownloads;
     juce::Label outputLabel;
     juce::ComboBox outputs;
 
@@ -95,5 +103,7 @@ private:
     juce::Array<juce::File> pendingDropFiles;
     RequestedOutputFamily pendingDropFamily { RequestedOutputFamily::Mix };
     bool externalFileDragActive { false };
+    juce::StringArray seenDownloadPaths;
+    int downloadWatchTick { 0 };
 };
 } // namespace suno::bridge
