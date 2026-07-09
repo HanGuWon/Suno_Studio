@@ -72,3 +72,11 @@ cmake --build build/plugin_juce --target BridgeContractVectors
 ```
 
 If JUCE is unavailable, C++ binaries may not build in this environment.
+
+FL Studio drag/drop smoke testing:
+
+```bash
+python tools/make_fl_studio_smoke_assets.py
+```
+
+Then follow `docs/fl_studio_drag_smoke_test.md`.
