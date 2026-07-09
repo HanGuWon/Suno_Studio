@@ -51,10 +51,11 @@ Expected family routing:
 
 ## Test client output into FL Studio
 
-1. Select a completed output in the client result selector.
-2. Use `Drag / copy result path`.
-3. Drop into the FL Studio Playlist.
-4. Confirm the clip lands on a Playlist track and the clipboard path still points to the same file.
+1. Confirm the client shows `Output: <file name>` above the result selector.
+2. Select a completed output in the result selector when more than one file is available.
+3. Use `Drag Selected Output`.
+4. Drop into the FL Studio Playlist.
+5. Confirm the clip lands on a Playlist track and the clipboard path still points to the same file.
 
 ## Record result
 

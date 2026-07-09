@@ -27,6 +27,10 @@ private:
     bool isFamilyRequested(RequestedOutputFamily family) const;
     juce::String manualImportSummary() const;
     void chooseAndAddFiles(juce::Array<juce::File>& target, const juce::String& title);
+    void syncSelectedOutput();
+    void updateOutputActions();
+    bool revealSelectedOutput(juce::String& errorOut);
+    bool dragSelectedOutputToDaw(juce::String& errorOut);
 
     void buttonClicked(juce::Button* button) override;
     void timerCallback() override;
@@ -61,6 +65,7 @@ private:
     juce::TextButton reveal;
     juce::TextButton drag;
 
+    juce::Label outputLabel;
     juce::ComboBox outputs;
 
     juce::Array<juce::File> mixFiles;
